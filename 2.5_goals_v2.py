@@ -111,32 +111,32 @@ param_grid = [
         'model__max_iter': [100, 200, 500, 1000],  # Expanded iteration range
         'model__class_weight': [None, 'balanced'],  # Considering imbalanced datasets
     },
-    # {
-    #     'model': [RandomForestClassifier()],
-    #     'model__n_estimators': [50, 100, 200, 500, 1000],  # Adding larger estimator ranges
-    #     'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
-    #     'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
-    #     'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
-    #     'model__max_features': ['sqrt', 'log2', None],  # Number of features to consider for splitting
-    #     'model__bootstrap': [True, False],  # Whether bootstrap samples are used
-    #     'model__class_weight': [None, 'balanced', 'balanced_subsample'],  # Considering class weights
-    # },
-    # {
-    #     'model': [MLPClassifier()],
-    #     'model__hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
-    #     'model__activation': ['relu', 'tanh', 'logistic'],
-    #     'model__solver': ['adam', 'sgd'],
-    #     'model__alpha': [0.0001, 0.001, 0.01],
-    #     'model__learning_rate': ['constant', 'adaptive'],
-    #     'model__max_iter': [1000],
-    # },
+    {
+        'model': [RandomForestClassifier()],
+        'model__n_estimators': [50, 100, 200, 500, 1000],  # Adding larger estimator ranges
+        'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
+        'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
+        'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
+        'model__max_features': ['sqrt', 'log2', None],  # Number of features to consider for splitting
+        'model__bootstrap': [True, False],  # Whether bootstrap samples are used
+        'model__class_weight': [None, 'balanced', 'balanced_subsample'],  # Considering class weights
+    },
+    {
+        'model': [MLPClassifier()],
+        'model__hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
+        'model__activation': ['relu', 'tanh', 'logistic'],
+        'model__solver': ['adam', 'sgd'],
+        'model__alpha': [0.0001, 0.001, 0.01],
+        'model__learning_rate': ['constant', 'adaptive'],
+        'model__max_iter': [1000],
+    },
 
 ]
 
 # Prepare to store results
 results = []
 output_folder = "goals"
-output_file = os.path.join(output_folder, "results.txt")
+output_file = os.path.join(output_folder, "results_1.txt")
 
 # Ensure the folder exists
 os.makedirs(output_folder, exist_ok=True)
@@ -145,7 +145,7 @@ os.makedirs(output_folder, exist_ok=True)
 test_counter = 0
 
 # Probability thresholds to test
-thresholds = np.arange(0.5, 0.85, 0.05)
+thresholds = np.arange(0.5, 0.82, 0.01)
 
 # Calculate total combinations
 total_combinations = 0
@@ -202,7 +202,7 @@ for grid in param_grid:
 
                 # Total number of bets placed
                 total_stake = len(profit_list)
-                roi = profit / total_stake if total_stake > 0 else 0
+                roi = (profit / total_stake)*100 if total_stake > 0 else 0
 
                 # Perform one-sample t-test for the null hypothesis (mean profit < 0)
                 if total_stake > 0:
