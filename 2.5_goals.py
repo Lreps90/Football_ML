@@ -96,18 +96,13 @@ param_grid = [
         'model__solver': ['liblinear', 'lbfgs'],
         'model__max_iter': [100, 200],
     },
-    {
-        'model': [RandomForestClassifier()],
-        'model__n_estimators': [50, 100, 200],
-        'model__max_depth': [None, 10, 20],
-        'model__min_samples_split': [2, 5, 10],
-    },
-    {
-        'model': [SVC()],
-        'model__C': [0.1, 1, 10, 100],
-        'model__kernel': ['linear', 'rbf', 'poly'],
-        'model__degree': [3, 4],
-    }
+    # {
+    #     'model': [RandomForestClassifier()],
+    #     'model__n_estimators': [50, 100, 200],
+    #     'model__max_depth': [None, 10, 20],
+    #     'model__min_samples_split': [2, 5, 10],
+    # },
+
 ]
 
 # Initialize GridSearchCV with multiple models
@@ -140,6 +135,26 @@ print("\nAccuracy:", accuracy)
 print("Precision:", precision)
 print("Recall:", recall)
 print("F1 Score:", f1)
+
+# Calculate betting results
+profit = 0
+for index, pred in enumerate(y_pred):
+    if pred == 1:
+        # Simulate placing a bet with potential profit or loss
+        odds = data.iloc[test_data.index[index]]['o2.5_odds']
+        if y_test.iloc[index] == 1:
+            profit += (odds * 1) - 1  # Calculate profit
+        else:
+            profit -= 1  # Lose the bet
+
+# Total number of bets placed
+total_stake = y_pred.sum()
+roi = profit/total_stake
+
+# Print betting results
+print(f"\nTotal Stake: £{total_stake}")
+print(f"Net Profit: £{profit:.2f}")
+print(f"ROI: {roi:.1f}%")
 
 # Print the best parameters found
 print("\nBest parameters:", grid_search.best_params_)
