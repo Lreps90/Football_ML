@@ -6,7 +6,6 @@ from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-
 # List of common encodings to try
 encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
 
@@ -18,6 +17,12 @@ for encoding in encodings:
         break
     except UnicodeDecodeError:
         print(f"Failed to decode with encoding: {encoding}")
+
+# if data is not None:
+#     # View the data to ensure it was read correctly
+#     print(data.head())
+# else:
+#     print("Unable to read the file with the tested encodings.")
 
 col_dict = {
     "country": "Country",
@@ -50,7 +55,6 @@ col_dict = {
 }
 
 data = data.rename(columns=col_dict).filter(items=col_dict.values())
-
 # Convert Date column to datetime type
 data['Date'] = pd.to_datetime(data['Date'], format='%d/%m/%Y')
 
@@ -63,20 +67,18 @@ data.reset_index(drop=True, inplace=True)
 
 data['total_goals'] = data['home_goals'] + data['away_goals']
 data['over_2.5_goals'] = data['total_goals'].apply(lambda x: 1 if x > 2.5 else 0)
-
-data = data.drop(columns=['home_team', 'away_team', 'home_goals', 'away_goals', 'total_goals', 'o2.5_odds'])
+data_ready = data.drop(columns=['home_team', 'away_team', 'home_goals', 'away_goals', 'total_goals', 'o2.5_odds'])
 # Apply one-hot encoding to 'Country' and 'League'
-data = pd.get_dummies(data, columns=['Country', 'League'])
+data_ready = pd.get_dummies(data_ready, columns=['Country', 'League'])
 
 # Split the data into training and testing sets by date
-cut_off_date = data['Date'].quantile(0.8)
-train_data = data[data['Date'] <= cut_off_date]
+cut_off_date = data_ready['Date'].quantile(0.8)
+train_data = data_ready[data_ready['Date'] <= cut_off_date]
 y_train = train_data["over_2.5_goals"]
 train_data = train_data.drop(columns=['Date', 'over_2.5_goals'])
-test_data = data[data['Date'] > cut_off_date]
+test_data = data_ready[data_ready['Date'] > cut_off_date]
 y_test = test_data["over_2.5_goals"]
 test_data = test_data.drop(columns=['Date', 'over_2.5_goals'])
-
 # Initialize the scaler
 scaler = StandardScaler()
 
@@ -86,23 +88,32 @@ scaler.fit(train_data)
 # Transform the training and testing data
 train_data_scaled = scaler.transform(train_data)
 test_data_scaled = scaler.transform(test_data)
-
-
 # Define parameter grid for multiple models
 param_grid = [
     {
         'model': [LogisticRegression()],
-        'model__C': [0.1, 1, 10, 100],
-        'model__solver': ['liblinear', 'lbfgs'],
-        'model__max_iter': [100, 200],
+        'model__C': [0.01, 0.1, 1, 10, 100, 1000],  # Adding more fine-grained values
+        'model__solver': ['liblinear', 'lbfgs', 'newton-cg', 'sag', 'saga'],  # Covering all available solvers
+        'model__penalty': ['l1', 'l2', 'elasticnet', 'none'],  # Additional penalties for regularisation
+        'model__max_iter': [100, 200, 500, 1000],  # Expanded iteration range
+        'model__class_weight': [None, 'balanced'],  # Considering imbalanced datasets
     },
     # {
     #     'model': [RandomForestClassifier()],
-    #     'model__n_estimators': [50, 100, 200],
-    #     'model__max_depth': [None, 10, 20],
-    #     'model__min_samples_split': [2, 5, 10],
+    #     'model__n_estimators': [50, 100, 200, 500, 1000],  # Adding larger estimator ranges
+    #     'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
+    #     'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
+    #     'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
+    #     'model__max_features': ['sqrt', 'log2', None],  # Number of features to consider for splitting
+    #     'model__bootstrap': [True, False],  # Whether bootstrap samples are used
+    #     'model__class_weight': [None, 'balanced', 'balanced_subsample'],  # Considering class weights
     # },
-
+    # # {
+    #     'model': [SVC()],
+    #     'model__C': [0.1, 1, 10, 100],
+    #     'model__kernel': ['linear', 'rbf', 'poly'],
+    #     'model__degree': [3, 4],
+    # }
 ]
 
 # Initialize GridSearchCV with multiple models
