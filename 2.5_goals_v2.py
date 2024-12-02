@@ -111,25 +111,25 @@ param_grid = [
         'model__max_iter': [100, 200, 500, 1000],  # Expanded iteration range
         'model__class_weight': [None, 'balanced'],  # Considering imbalanced datasets
     },
-    {
-        'model': [RandomForestClassifier()],
-        'model__n_estimators': [50, 100, 200, 500, 1000],  # Adding larger estimator ranges
-        'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
-        'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
-        'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
-        'model__max_features': ['sqrt', 'log2', None],  # Number of features to consider for splitting
-        'model__bootstrap': [True, False],  # Whether bootstrap samples are used
-        'model__class_weight': [None, 'balanced', 'balanced_subsample'],  # Considering class weights
-    },
-    {
-        'model': [MLPClassifier()],
-        'model__hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
-        'model__activation': ['relu', 'tanh', 'logistic'],
-        'model__solver': ['adam', 'sgd'],
-        'model__alpha': [0.0001, 0.001, 0.01],
-        'model__learning_rate': ['constant', 'adaptive'],
-        'model__max_iter': [1000],
-    },
+    # {
+    #     'model': [RandomForestClassifier()],
+    #     'model__n_estimators': [50, 100, 200, 500, 1000],  # Adding larger estimator ranges
+    #     'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
+    #     'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
+    #     'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
+    #     'model__max_features': ['sqrt', 'log2', None],  # Number of features to consider for splitting
+    #     'model__bootstrap': [True, False],  # Whether bootstrap samples are used
+    #     'model__class_weight': [None, 'balanced', 'balanced_subsample'],  # Considering class weights
+    # },
+    # {
+    #     'model': [MLPClassifier()],
+    #     'model__hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
+    #     'model__activation': ['relu', 'tanh', 'logistic'],
+    #     'model__solver': ['adam', 'sgd'],
+    #     'model__alpha': [0.0001, 0.001, 0.01],
+    #     'model__learning_rate': ['constant', 'adaptive'],
+    #     'model__max_iter': [1000],
+    # },
 
 ]
 
@@ -162,7 +162,6 @@ for grid in param_grid:
 
     # Iterate over each parameter combination
     for combination in combinations:
-        test_counter += 1  # Increment counter
         params = dict(zip(keys, combination))  # Create a parameter dictionary
 
         # Extract the model
@@ -180,6 +179,7 @@ for grid in param_grid:
 
             # Test at different thresholds
             for threshold in thresholds:
+                test_counter += 1  # Increment counter
                 y_pred = (y_proba >= threshold).astype(int)  # Apply threshold
 
                 # Evaluate the model
@@ -234,7 +234,7 @@ for grid in param_grid:
 
 # Write sorted results to the text file
 if results:
-    results.sort()  # Sort by p-value (first element of the tuple)
+    results.sort(key=lambda x: x[0])  # Sort by p_value (first element of the tuple)
     with open(output_file, "w") as file:
         for result in results:
             p_value, threshold, total_stake, profit, roi, params = result
