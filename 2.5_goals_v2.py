@@ -18,6 +18,7 @@ from scipy.stats import ttest_1samp
 import numpy as np
 import os
 from sklearn.neural_network import MLPClassifier
+import random as rd
 
 # List of common encodings to try
 encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
@@ -103,17 +104,17 @@ train_data_scaled = scaler.transform(train_data)
 test_data_scaled = scaler.transform(test_data)
 # Define parameter grid for multiple models
 param_grid = [
-    {
-        'model': [LogisticRegression()],
-        'model__C': [0.01, 0.1, 1, 10, 100, 1000],  # Adding more fine-grained values
-        'model__solver': ['liblinear', 'lbfgs', 'newton-cg', 'sag', 'saga'],  # Covering all available solvers
-        'model__penalty': ['l1', 'l2', 'elasticnet', 'none'],  # Additional penalties for regularisation
-        'model__max_iter': [100, 200, 500, 1000],  # Expanded iteration range
-        'model__class_weight': [None, 'balanced'],  # Considering imbalanced datasets
-    },
+    # {
+    #     'model': [LogisticRegression()],
+    #     'model__C': [0.01, 0.1, 1, 10, 100, 1000],  # Adding more fine-grained values
+    #     'model__solver': ['liblinear', 'lbfgs', 'newton-cg', 'sag', 'saga'],  # Covering all available solvers
+    #     'model__penalty': ['l1', 'l2', 'elasticnet', 'none'],  # Additional penalties for regularisation
+    #     'model__max_iter': [100, 200, 500, 1000],  # Expanded iteration range
+    #     'model__class_weight': [None, 'balanced'],  # Considering imbalanced datasets
+    # },
     {
         'model': [RandomForestClassifier()],
-        'model__n_estimators': [50, 100, 200, 500, 1000],  # Adding larger estimator ranges
+        'model__n_estimators': [50, 100, 200],  # Adding larger estimator ranges
         'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
         'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
         'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
@@ -136,16 +137,16 @@ param_grid = [
 # Prepare to store results
 results = []
 output_folder = "goals"
-output_file = os.path.join(output_folder, "results_1.txt")
+# Ensure the output folder exists
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder)
 
-# Ensure the folder exists
-os.makedirs(output_folder, exist_ok=True)
 
 # Initialise counter
 test_counter = 0
 
 # Probability thresholds to test
-thresholds = np.arange(0.5, 0.82, 0.01)
+thresholds = np.arange(0.5, 0.96, 0.01)
 
 # Calculate total combinations
 total_combinations = 0
@@ -208,7 +209,7 @@ for grid in param_grid:
                 if total_stake > 0:
                     t_stat, p_value = ttest_1samp(profit_list, 0)  # Null hypothesis: mean profit = 0
                     p_value /= 2  # One-tailed test
-                    if np.mean(profit_list) > 0:
+                    if (np.mean(profit_list) > 0) & (total_stake > 500):
                         # Add results to the list
                         results.append((p_value, threshold, total_stake, profit, roi, params))
                         print(f"Results saved temporarily:")
@@ -222,8 +223,22 @@ for grid in param_grid:
                         print(f"  ROI: {roi:.1f}%")
                         print(f"  p-value: 1.0000")
 
+                    # Write sorted results to the text file
+                    if results:
+                        # rand_tag = rd.randint(1, 10000)
+                        output_file = os.path.join(output_folder, f"results_{test_counter}.txt")
+                        results.sort(key=lambda x: x[0])  # Sort by p_value (first element of the tuple)
+                        with open(output_file, "w") as file:
+                            for result in results:
+                                p_value, threshold, total_stake, profit, roi, params = result
+                                file.write(
+                                    f"p-value: {p_value:.4f}, Threshold: {threshold:.2f}, Staked: {total_stake}, Profit: £{profit:.2f}, ROI: {roi:.1f}%, Params: {params}\n")
+                        print(f"\nResults saved to {output_file}.")
+                    else:
+                        print("\nNo profitable results to save.")
+
                 else:
-                    print(f"  Threshold {threshold:.2f}: No bets placed, skipping profit analysis.")
+                    print(f"  Threshold {threshold:.2f}: Not enough bets placed, skipping profit analysis.")
 
         except ValueError as e:
             # Catch parameter compatibility errors
@@ -232,14 +247,6 @@ for grid in param_grid:
             # Catch all other errors
             print(f"Test {test_counter}: Unexpected error: {e}")
 
-# Write sorted results to the text file
-if results:
-    results.sort(key=lambda x: x[0])  # Sort by p_value (first element of the tuple)
-    with open(output_file, "w") as file:
-        for result in results:
-            p_value, threshold, total_stake, profit, roi, params = result
-            file.write(
-                f"p-value: {p_value:.4f}, Threshold: {threshold:.2f}, Staked: {total_stake}, Profit: £{profit:.2f}, ROI: {roi:.1f}%, Params: {params}\n")
-    print(f"\nResults saved to {output_file}.")
-else:
-    print("\nNo profitable results to save.")
+
+
+
