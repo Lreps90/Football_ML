@@ -80,6 +80,8 @@ leagues = data[['Country', 'League']].drop_duplicates().apply(tuple, axis=1)
 no_leagues = len(leagues)
 league_counter = 0
 runs = 5
+# Probability thresholds to test
+thresholds = np.arange(0.5, 0.8, 0.01)
 
 data_ready = data.drop(columns=['home_team', 'away_team', 'home_goals', 'away_goals', 'total_goals', 'o2.5_odds', ])
 for league in leagues:
@@ -142,46 +144,46 @@ for league in leagues:
         alpha_medium = [rd.uniform(0.01, 0.1), rd.uniform(0.01, 0.1)]
         alpha_large = [rd.uniform(0.1, 1), rd.uniform(0.1, 1)]
         alpha_very_large = [rd.uniform(1, 10), rd.uniform(1, 10)]
-        if i == 0:
+        if i == 100:
             param_grid_1 = [
-                # {
-                #     'model': [LogisticRegression()],
-                #     'model__C': [0.01, 0.1, 1, 10],  # Adding more fine-grained values
-                #     'model__solver': ['liblinear', 'lbfgs', 'newton-cg', 'sag', 'saga'],
-                #     # Covering all available solvers
-                #     'model__penalty': ['l1', 'l2', 'elasticnet', 'none'],  # Additional penalties for regularisation
-                #     'model__max_iter': [500, 1000],  # Expanded iteration range
-                #     'model__class_weight': [None, 'balanced'],  # Considering imbalanced datasets
-                # },
                 {
-                    'model': [RandomForestClassifier()],
-                    'model__n_estimators': [50, 100, 200],  # Adding larger estimator ranges
-                    'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
-                    'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
-                    'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
-                    'model__max_features': ['sqrt', 'log2', None],  # Number of features to consider for splitting
-                    'model__bootstrap': [True, False],  # Whether bootstrap samples are used
-                    'model__class_weight': [None, 'balanced', 'balanced_subsample'],  # Considering class weights
+                    'model': [LogisticRegression(random_state=42)],
+                    'model__C': [0.01, 0.1, 1, 10],  # Adding more fine-grained values
+                    'model__solver': ['liblinear', 'lbfgs', 'newton-cg', 'sag', 'saga'],
+                    # Covering all available solvers
+                    'model__penalty': ['l1', 'l2', 'elasticnet', 'none'],  # Additional penalties for regularisation
+                    'model__max_iter': [500, 1000],  # Expanded iteration range
+                    'model__class_weight': [None, 'balanced'],  # Considering imbalanced datasets
                 },
                 # {
-                #     'model': [MLPClassifier()],
-                #     'model__hidden_layer_sizes': [(100,), (50, 50)],
-                #     'model__activation': ['tanh', 'relu', 'tanh', 'logistic'],  #
-                #     'model__solver': ['adam', 'sgd'],  #
-                #     'model__alpha': [0.1, 1, 10],
-                #     'model__learning_rate': ['constant', 'adaptive'],  # ,
-                #     'model__max_iter': [5000],
+                #     'model': [RandomForestClassifier(random_state=42)],
+                #     'model__n_estimators': [50, 100, 200],  # Adding larger estimator ranges
+                #     'model__max_depth': [None, 5, 10, 20, 50],  # Including smaller and larger depth values
+                #     'model__min_samples_split': [2, 5, 10, 20],  # Including a wider range of splits
+                #     'model__min_samples_leaf': [1, 2, 4, 10],  # Minimum samples in a leaf node
+                #     'model__max_features': ['sqrt', 'log2', None],  # Number of features to consider for splitting
+                #     'model__bootstrap': [True, False],  # Whether bootstrap samples are used
+                #     'model__class_weight': [None, 'balanced', 'balanced_subsample'],  # Considering class weights
                 # },
+                {
+                    'model': [MLPClassifier(random_state=42)],
+                    'model__hidden_layer_sizes': [(100,), (50, 50)],
+                    'model__activation': ['tanh', 'relu', 'tanh', 'logistic'],  #
+                    'model__solver': ['adam', 'sgd'],  #
+                    'model__alpha': [0.1, 1, 10],
+                    'model__learning_rate': ['constant', 'adaptive'],  # ,
+                    'model__max_iter': [5000],
+                },
             ]
         else:
             param_grid_1 = []
         param_grid_2 = [
             {
-                'model': [RandomForestClassifier()],
+                'model': [RandomForestClassifier(random_state=42)],
                 'model__n_estimators': [
                     n_estimators_small[0], n_estimators_small[1],
                     n_estimators_medium[0], n_estimators_medium[1],
-                    #n_estimators_large[0], n_estimators_large[1],
+                    n_estimators_large[0], n_estimators_large[1],
                 ],
                 'model__max_depth': [
                     max_depth_shallow[0], max_depth_shallow[1],
@@ -199,29 +201,26 @@ for league in leagues:
                 ],
                 'model__bootstrap': [True, False],
             },
-            # {
-            #     'model': [MLPClassifier()],
-            #     'model__hidden_layer_sizes': [
-            #         (hidden_layer_small[0], hidden_layer_small[1]),
-            #         (hidden_layer_medium[0], hidden_layer_medium[1]),
-            #         (hidden_layer_small[0], hidden_layer_medium[1]),
-            #         (hidden_layer_large[0]),
-            #         (hidden_layer_large[1]),
-            #         (hidden_layer_large[0], hidden_layer_medium[0]),
-            #     ],
-            #     'model__activation': ['tanh'],
-            #     'model__solver': ['adam', 'sgd'],
-            #     'model__alpha': [alpha_medium[0], alpha_large[0],
-            #                      alpha_medium[1], alpha_large[1],
-            #                      alpha_very_large[0], alpha_very_large[1]],
-            #     'model__learning_rate': ['constant'],
-            #     'model__max_iter': [5000],
-            # },
+            {
+                'model': [MLPClassifier(random_state=42)],
+                'model__hidden_layer_sizes': [
+                    (hidden_layer_small[0], hidden_layer_small[1]),
+                    (hidden_layer_medium[0], hidden_layer_medium[1]),
+                    (hidden_layer_small[0], hidden_layer_medium[1]),
+                    (hidden_layer_large[0]),
+                    (hidden_layer_large[1]),
+                    (hidden_layer_large[0], hidden_layer_medium[0]),
+                ],
+                'model__activation': ['tanh'],
+                'model__solver': ['adam', 'sgd'],
+                'model__alpha': [alpha_tiny[0], alpha_small[0], alpha_medium[0], alpha_large[0],
+                                 alpha_medium[1], alpha_large[1],
+                                 alpha_very_large[0], alpha_very_large[1]],
+                'model__learning_rate': ['constant'],
+                'model__max_iter': [5000],
+            },
         ]
         param_grid = param_grid_1 + param_grid_2
-
-        # Probability thresholds to test
-        thresholds = np.arange(0.5, 0.8, 0.01)
 
         # Calculate total combinations
         total_combinations = 0
