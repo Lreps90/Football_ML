@@ -13,25 +13,23 @@ from sklearn.metrics import accuracy_score
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
-# List of common encodings to try
+# List of encodings to try
 encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
 
-data = None
+# Variables to store data
+data1, data2 = None, None
+
+# Attempt to read both files with each encoding
 for encoding in encodings:
     try:
-        data = pd.read_csv("GOAL_DATA_3.CSV", encoding=encoding)
-        print(f"Successfully read the file with encoding: {encoding}")
+        data1 = pd.read_csv("GOAL_DATA_PAST_SEASON.CSV", encoding=encoding, low_memory=False)
+        data2 = pd.read_csv("GOAL_DATA_PAST_5.CSV", encoding=encoding, low_memory=False)
+        print(f"Successfully read the files with encoding: {encoding}")
         break
     except UnicodeDecodeError:
         print(f"Failed to decode with encoding: {encoding}")
 
-# if data is not None:
-#     # View the data to ensure it was read correctly
-#     print(data.head())
-# else:
-#     print("Unable to read the file with the tested encodings.")
-
-col_dict = {
+col_dict_1 = {
     "country": "Country",
     "league": "League",
     "datameci": "Date",
@@ -61,7 +59,45 @@ col_dict = {
     "cotao": "o2.5_odds",
 }
 
-data = data.rename(columns=col_dict).filter(items=col_dict.values())
+col_dict_2 = {
+    "country": "Country",
+    "league": "League",
+    "datameci": "Date",
+    "etapa": "Round",
+    "txtechipa1": "home_team",
+    "txtechipa2": "away_team",
+    "place1t": "Home_team_place_total",
+    "place1a": "Home_team_place_home",
+    "place2t": "Away_team_place_total",
+    "place2d": "Away_team_place_away",
+    "customh": "ELO_home_past_5",
+    "customa": "ELO_away_past_5",
+    "custom3": "FORM_home_past_5",
+    "custom4": "FORM_away_past_5",
+    "home_val": "home_win_past_5",
+    "home_val_2": "home_win_15_past_5",
+    "home_val_3": "home_o25_past_5",
+    "home_val_4": "home_o35_past_5",
+    "home_val_5": "home_scored_past_5",
+    "away_val": "away_win_past_5",
+    "away_val_2": "away_win_15_past_5",
+    "away_val_3": "away_o25_past_5",
+    "away_val_4": "away_o35_past_5",
+    "away_val_5": "away_scored_past_5",
+    "scor1": "home_goals",
+    "scor2": "away_goals",
+    "cotao": "o2.5_odds",
+}
+
+data1 = data1.rename(columns=col_dict_1).filter(items=col_dict_1.values())
+data2 = data2.rename(columns=col_dict_2).filter(items=col_dict_2.values())
+
+# Merge data1 and data2 on all columns with matching names
+data = pd.merge(
+    data1,
+    data2,
+    how='inner'  # Use 'inner' join to keep only matching columns
+)
 # Convert Date column to datetime type
 data['Date'] = pd.to_datetime(data['Date'], format='%d/%m/%Y')
 
@@ -81,11 +117,17 @@ no_leagues = len(leagues)
 league_counter = 0
 runs = 5
 # Probability thresholds to test
-thresholds = np.arange(0.5, 0.8, 0.01)
+thresholds = np.arange(0.3, 0.8, 0.01)
 
 data_ready = data.drop(columns=['home_team', 'away_team', 'home_goals', 'away_goals', 'total_goals', 'o2.5_odds', ])
 for league in leagues:
     league_counter += 1
+    output_folder = f"Leagues_ALL_v2/{league[0]}_{league[1]}"
+
+    # Check if the directory exists and has 5 files
+    if os.path.exists(output_folder) and len(os.listdir(output_folder)) >= 5:
+        print(f"Skipping league {league} as output directory already contains 5 or more files.")
+        continue
     # Initialise counter
     test_counter = 0
     # Prepare to store results
@@ -317,7 +359,7 @@ for league in leagues:
 
         # Write sorted results to the text file
         if results:
-            output_folder = f"Leagues_ALL/{league[0]}_{league[1]}"
+            output_folder = f"Leagues_ALL_v2/{league[0]}_{league[1]}"
             # Ensure the output folder exists
             if not os.path.exists(output_folder):
                 os.makedirs(output_folder)

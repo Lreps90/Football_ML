@@ -203,24 +203,24 @@ for league in leagues:
                 ],
                 'model__bootstrap': [True, False],
             },
-            {
-                'model': [MLPClassifier(random_state=42)],
-                'model__hidden_layer_sizes': [
-                    (hidden_layer_small[0], hidden_layer_small[1]),
-                    (hidden_layer_medium[0], hidden_layer_medium[1]),
-                    (hidden_layer_small[0], hidden_layer_medium[1]),
-                    (hidden_layer_large[0]),
-                    (hidden_layer_large[1]),
-                    (hidden_layer_large[0], hidden_layer_medium[0]),
-                ],
-                'model__activation': ['tanh'],
-                'model__solver': ['adam', 'sgd'],
-                'model__alpha': [alpha_tiny[0], alpha_small[0], alpha_medium[0], alpha_large[0],
-                                 alpha_medium[1], alpha_large[1],
-                                 alpha_very_large[0], alpha_very_large[1]],
-                'model__learning_rate': ['constant'],
-                'model__max_iter': [5000],
-            },
+            # {
+            #     'model': [MLPClassifier(random_state=42)],
+            #     'model__hidden_layer_sizes': [
+            #         (hidden_layer_small[0], hidden_layer_small[1]),
+            #         (hidden_layer_medium[0], hidden_layer_medium[1]),
+            #         (hidden_layer_small[0], hidden_layer_medium[1]),
+            #         (hidden_layer_large[0]),
+            #         (hidden_layer_large[1]),
+            #         (hidden_layer_large[0], hidden_layer_medium[0]),
+            #     ],
+            #     'model__activation': ['tanh'],
+            #     'model__solver': ['adam', 'sgd'],
+            #     'model__alpha': [alpha_tiny[0], alpha_small[0], alpha_medium[0], alpha_large[0],
+            #                      alpha_medium[1], alpha_large[1],
+            #                      alpha_very_large[0], alpha_very_large[1]],
+            #     'model__learning_rate': ['constant'],
+            #     'model__max_iter': [5000],
+            # },
         ]
         param_grid = param_grid_1 + param_grid_2
 

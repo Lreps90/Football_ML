@@ -19,7 +19,7 @@ encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
 data = None
 for encoding in encodings:
     try:
-        data = pd.read_csv("GOAL_DATA_TOP_5.csv", encoding=encoding)
+        data = pd.read_csv("RETIRED/GOAL_DATA_TOP_5.CSV", encoding=encoding)
         print(f"Successfully read the file with encoding: {encoding}")
         break
     except UnicodeDecodeError:
