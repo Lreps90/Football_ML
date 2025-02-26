@@ -18,7 +18,7 @@ import csv
 
 start_time = time.time()  # Record start time
 file_name = "master_db_eng1_20_25_by_match"
-data = pd.read_csv(rf"C:\Users\leere\PycharmProjects\Football_ML3\Corners\Data\{file_name}.csv")
+data = pd.read_csv(rf"/Corners/ARCHIVE/Data\{file_name}.csv")
 data = data[data["round"]>7]
 data["total_corners"]=data["corners_home"]+data["corners_away"]
 

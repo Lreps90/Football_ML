@@ -14,22 +14,38 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.pipeline import Pipeline
 from sklearn.neural_network import MLPRegressor
 import time
+import csv
 
 start_time = time.time()  # Record start time
+file_name = "master_db_eng1_20_25_by_match"
+data = pd.read_csv(rf"/Corners/ARCHIVE/Data\{file_name}.csv")
+data = data[data["round"]>7]
+data["total_corners"]=data["corners_home"]+data["corners_away"]
 
-data = pd.read_csv(r"C:\Users\leere\PycharmProjects\Football_ML3\Corners\Data\all_21_25_by_match.csv")
-data = data[data["Round"]>7]
-# Drop non-numeric and irrelevant columns
-irrelevant_columns = ["Country", "League", "Date", "Home team", "Away team", "Season"]
-df_numeric = data.drop(columns=irrelevant_columns, errors="ignore")
-df_numeric["corners_won_total"] = df_numeric["Home team corners"] + df_numeric["Away team corners"]
+# Define the columns to drop
+columns_to_drop = [
+    "shots_home", "shots_home_1h", "shots_home_2h",
+    "shots_away", "shots_away_1h", "shots_away_2h",
+    "shots_on_target_home", "shots_on_target_home_1h", "shots_on_target_home_2h",
+    "shots_on_target_away", "shots_on_target_away_1h", "shots_on_target_away_2h",
+    "corners_home", "corners_home_1h", "corners_home_2h",
+    "corners_away", "corners_away_1h", "corners_away_2h",
+    "fouls_home", "fouls_home_1h", "fouls_home_2h",
+    "fouls_away", "fouls_away_1h", "fouls_away_2h",
+    "yellow_cards_home", "yellow_cards_home_1h", "yellow_cards_home_2h",
+    "yellow_cards_away", "yellow_cards_away_1h", "yellow_cards_away_2h",
+    "possession_home", "possession_home_1h", "possession_home_2h",
+    "possession_away", "possession_away_1h", "possession_away_2h",
+    "goals_scored_total_home", "goals_conceded_total_home",
+    "goals_scored_total_away", "goals_conceded_total_away", "country", "season", "date", "ko_time", "home_team", "away_team", "home_goals_ft", "away_goals_ft", "home_goals_ht", "away_goals_ht", "points_home", "points_away",
+]
 
-# Drop rows where target variable is missing
-df_numeric = df_numeric.dropna(subset=["corners_won_total"])
+# Drop the specified columns
+data = data.drop(columns=columns_to_drop, errors='ignore')
 
 # Define target and features
-y = df_numeric["corners_won_total"]
-X = df_numeric.drop(columns=["corners_won_total", "Home team corners", "Away team corners"], errors="ignore")
+y = data["total_corners"]
+X = data.drop(columns=["total_corners"], errors="ignore")
 
 # Fill missing values with median
 X = X.fillna(X.median())
@@ -71,14 +87,14 @@ models = {
     #         'alpha': [0.0001, 0.01, 0.1],
     #     }
     # },
-    "SVR": {
-        "model": SVR(),
-        "param_grid": {
-            'C': [1, 10, 100],
-            'kernel': ['linear', 'rbf'],
-            'epsilon': [0.1, 0.2],
-        }
-    },
+    # "SVR": {
+    #     "model": SVR(),
+    #     "param_grid": {
+    #         'C': [1, 10, 100],
+    #         'kernel': ['linear', 'rbf'],
+    #         'epsilon': [0.1, 0.2],
+    #     }
+    # },
     # "RandomForest": {
     #     "model": RandomForestRegressor(random_state=42),
     #     "param_grid": {
@@ -127,6 +143,16 @@ models = {
     #         'gamma': ['scale', 'auto', 0.01, 0.1, 1, 10]  # Kernel coefficient
     #     }
     # }
+    "SVR": {
+        "model": SVR(),
+        "param_grid": {
+            'C': [0.0001, 0.001, 0.01, 0.1],  # More values for regularization
+            'kernel': ['sigmoid'],  # Additional kernels
+            'epsilon': [0.0001, 0.001, 0.01],  # More precision control
+            'degree': [2],  # Polynomial kernel degrees
+            'gamma': [0.0001, 0.001, 0.01, ]  # Kernel coefficient
+        }
+    }
 }
 
 def no_penalty_under_pred(y_true, y_pred, penalty=1.0):
@@ -168,7 +194,7 @@ for name, config in models.items():
             estimator=config["model"],
             param_grid=config["param_grid"],
             cv=3,
-            scoring=no_penalty_scorer,  # Custom scorer for over-predictions
+            scoring='neg_mean_absolute_error',  # Standard scoring (negative MAE)
             n_jobs=-1,
             verbose=10
         )
@@ -182,44 +208,49 @@ for name, config in models.items():
         # Predict with the best model
         y_pred = best_models[name].predict(X_test_scaled)
 
-        # Calculate adjusted metrics (only for over-predictions)
-        adjusted_errors = np.where(y_test >= y_pred, 0, y_pred - y_test)
-        adjusted_mae = np.mean(adjusted_errors)
-        adjusted_rmse = np.sqrt(np.mean(adjusted_errors ** 2))
-        adjusted_r2 = 1 - (np.sum(adjusted_errors ** 2) / np.sum((y_test - y_test.mean()) ** 2))
-
-        # Calculate win rate (where predicted ≤ actual)
-        win_rate = (y_pred <= y_test).sum() / len(y_test)
+        # Compute standard evaluation metrics
+        mae = mean_absolute_error(y_test, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        r2 = r2_score(y_test, y_pred)
 
         # Store results
         results[name] = {
             "Best Parameters": best_params,
-            "Adjusted MAE": adjusted_mae,
-            "Adjusted RMSE": adjusted_rmse,
-            "Adjusted R2 Score": adjusted_r2,
-            "Win Rate": win_rate
+            "MAE": mae,
+            "RMSE": rmse,
+            "R2 Score": r2
         }
 
         # Save predictions to CSV
-        test_results_df = X_test.copy()
-        test_results_df["Actual_Corners"] = y_test.values
-        test_results_df["Predicted_Corners"] = y_pred
-        test_results_df["Difference"] = y_test.values - y_pred
         file_name = f"{name}_predictions.csv"
-        test_results_df.to_csv(file_name, index=False)
+        with open(file_name, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Actual_Corners", "Predicted_Corners", "Difference"])
+            for actual, predicted in zip(y_test.values, y_pred):
+                writer.writerow([actual, predicted, actual - predicted])
+
+        print(f"Predictions saved to {file_name}")
 
     except Exception as e:
         print(f"Error training {name}: {e}")
 
-# Convert results to DataFrame
-df_results = pd.DataFrame.from_dict(results, orient='index')
+# Save summary results without using DataFrame
+summary_file = f"Model_Summary_{file_name}_{start_time}.csv"
+with open(summary_file, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(["Model", "Best Parameters", "MAE", "RMSE", "R2 Score"])
+    for model_name, metrics in results.items():
+        writer.writerow([
+            model_name,
+            metrics["Best Parameters"],
+            metrics["MAE"],
+            metrics["RMSE"],
+            metrics["R2 Score"]
+        ])
 
-# Save summary to CSV
-summary_file_path = f"Expanded_Model_Summary_1{start_time}"
-df_results.to_csv(summary_file_path, index=True)
+print(f"Model summary saved to {summary_file}")
 
-end_time = time.time()  # Record end time
-elapsed_time = end_time - start_time  # Calculate elapsed time
-
-print(f"Program executed in {elapsed_time:.2f} seconds")
-
+# Execution time
+end_time = time.time()
+elapsed_time = end_time - start_time
+print(f"Program executed in {elapsed_time / 60:.2f} minutes")

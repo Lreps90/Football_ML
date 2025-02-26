@@ -1,7 +1,9 @@
-import pandas as pd
-from datetime import datetime
-import numpy as np
 import time
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+
 import function_library as fl
 
 features = [
@@ -20,6 +22,7 @@ features = [
     'elo_away',
     'form_home',
     'form_away',
+
     # Home team overall features
     'home_Overall_RollingGoalsScored_Mean',
     'home_Overall_RollingGoalsConceded_Mean',
@@ -82,7 +85,52 @@ features = [
     'away_Away_RollingFirstHalfGoalsConceded_Std',
     'away_Away_RollingFirstHalfGoalsScored_Mean_Short',
     'away_Away_Momentum_FirstHalfGoalsScored',
-    'away_Away_Trend_Slope_FirstHalfGoalsScored'
+    'away_Away_Trend_Slope_FirstHalfGoalsScored',
+
+    # ----- Additional Goal Threshold Percentages (Per-Match Metrics) -----
+    # For thresholds: 1.5, 2.5, 3.5
+    # Overall team (season cumulative and rolling last 5 matches)
+    'home_Overall_Percent_Over_1.5',
+    'home_Overall_Rolling5_Percent_Over_1.5',
+    'home_Overall_Percent_Over_2.5',
+    'home_Overall_Rolling5_Percent_Over_2.5',
+    'home_Overall_Percent_Over_3.5',
+    'home_Overall_Rolling5_Percent_Over_3.5',
+
+    'away_Overall_Percent_Over_1.5',
+    'away_Overall_Rolling5_Percent_Over_1.5',
+    'away_Overall_Percent_Over_2.5',
+    'away_Overall_Rolling5_Percent_Over_2.5',
+    'away_Overall_Percent_Over_3.5',
+    'away_Overall_Rolling5_Percent_Over_3.5',
+
+    # Home matches only
+    'home_Home_Percent_Over_1.5',
+    'home_Home_Rolling5_Percent_Over_1.5',
+    'home_Home_Percent_Over_2.5',
+    'home_Home_Rolling5_Percent_Over_2.5',
+    'home_Home_Percent_Over_3.5',
+    'home_Home_Rolling5_Percent_Over_3.5',
+
+    # Away matches only
+    'away_Away_Percent_Over_1.5',
+    'away_Away_Rolling5_Percent_Over_1.5',
+    'away_Away_Percent_Over_2.5',
+    'away_Away_Rolling5_Percent_Over_2.5',
+    'away_Away_Percent_Over_3.5',
+    'away_Away_Rolling5_Percent_Over_3.5',
+
+    # Home matches only
+    'home_Home_TeamPct_Over_0.5',
+    'home_Home_TeamPct_Over_1.5',
+    'home_Home_TeamPct_Over_2.5',
+    'home_Home_TeamPct_Over_3.5',
+
+    # Away matches only
+    'away_Away_TeamPct_Over_0.5',
+    'away_Away_TeamPct_Over_1.5',
+    'away_Away_TeamPct_Over_2.5',
+    'away_Away_TeamPct_Over_3.5'
 ]
 
 
@@ -170,10 +218,12 @@ def prepare_data(file_path):
     data = data.rename(columns=column_dict).filter(items=column_dict.values())
 
     # Convert 'date' column to datetime object
-    data['date'] = pd.to_datetime(data['date'], format="%d/%m/%Y", errors='coerce')
+    data['date'] = pd.to_datetime(data['date'], format="%Y-%m-%d", errors='coerce')
     data = data.sort_values(by='date')
-    today = datetime.today().date()
-    data = data[data['date'].dt.date <= today]
+
+    # Convert today's date to a pandas Timestamp for compatibility.
+    today = pd.Timestamp(datetime.today().date())
+    data = data[data['date'] <= today]
 
     # Assign points based on match results
     data["points_home"] = data.apply(
@@ -245,20 +295,37 @@ def prepare_data(file_path):
         df = df_sub.copy()
 
         # Full-Time Goals Rolling Features
-        df[prefix + '_RollingGoalsScored_Mean'] = df['GoalsScored'].rolling(window=window_long, min_periods=1).mean().shift(1)
-        df[prefix + '_RollingGoalsConceded_Mean'] = df['GoalsConceded'].rolling(window=window_long, min_periods=1).mean().shift(1)
-        df[prefix + '_RollingGoalsScored_Std'] = df['GoalsScored'].rolling(window=window_long, min_periods=1).std().shift(1)
-        df[prefix + '_RollingGoalsConceded_Std'] = df['GoalsConceded'].rolling(window=window_long, min_periods=1).std().shift(1)
-        df[prefix + '_RollingGoalsScored_Mean_Short'] = df['GoalsScored'].rolling(window=window_short, min_periods=1).mean().shift(1)
-        df[prefix + '_Momentum_GoalsScored'] = df[prefix + '_RollingGoalsScored_Mean_Short'] - df[prefix + '_RollingGoalsScored_Mean']
+        df[prefix + '_RollingGoalsScored_Mean'] = df['GoalsScored'].rolling(window=window_long,
+                                                                            min_periods=1).mean().shift(1)
+        df[prefix + '_RollingGoalsConceded_Mean'] = df['GoalsConceded'].rolling(window=window_long,
+                                                                                min_periods=1).mean().shift(1)
+        df[prefix + '_RollingGoalsScored_Std'] = df['GoalsScored'].rolling(window=window_long,
+                                                                           min_periods=1).std().shift(1)
+        df[prefix + '_RollingGoalsConceded_Std'] = df['GoalsConceded'].rolling(window=window_long,
+                                                                               min_periods=1).std().shift(1)
+        df[prefix + '_RollingGoalsScored_Mean_Short'] = df['GoalsScored'].rolling(window=window_short,
+                                                                                  min_periods=1).mean().shift(1)
+        df[prefix + '_Momentum_GoalsScored'] = df[prefix + '_RollingGoalsScored_Mean_Short'] - df[
+            prefix + '_RollingGoalsScored_Mean']
 
         # First-Half Goals Rolling Features
-        df[prefix + '_RollingFirstHalfGoalsScored_Mean'] = df['FirstHalfGoalsScored'].rolling(window=window_long, min_periods=1).mean().shift(1)
-        df[prefix + '_RollingFirstHalfGoalsConceded_Mean'] = df['FirstHalfGoalsConceded'].rolling(window=window_long, min_periods=1).mean().shift(1)
-        df[prefix + '_RollingFirstHalfGoalsScored_Std'] = df['FirstHalfGoalsScored'].rolling(window=window_long, min_periods=1).std().shift(1)
-        df[prefix + '_RollingFirstHalfGoalsConceded_Std'] = df['FirstHalfGoalsConceded'].rolling(window=window_long, min_periods=1).std().shift(1)
-        df[prefix + '_RollingFirstHalfGoalsScored_Mean_Short'] = df['FirstHalfGoalsScored'].rolling(window=window_short, min_periods=1).mean().shift(1)
-        df[prefix + '_Momentum_FirstHalfGoalsScored'] = df[prefix + '_RollingFirstHalfGoalsScored_Mean_Short'] - df[prefix + '_RollingFirstHalfGoalsScored_Mean']
+        df[prefix + '_RollingFirstHalfGoalsScored_Mean'] = df['FirstHalfGoalsScored'].rolling(window=window_long,
+                                                                                              min_periods=1).mean().shift(
+            1)
+        df[prefix + '_RollingFirstHalfGoalsConceded_Mean'] = df['FirstHalfGoalsConceded'].rolling(window=window_long,
+                                                                                                  min_periods=1).mean().shift(
+            1)
+        df[prefix + '_RollingFirstHalfGoalsScored_Std'] = df['FirstHalfGoalsScored'].rolling(window=window_long,
+                                                                                             min_periods=1).std().shift(
+            1)
+        df[prefix + '_RollingFirstHalfGoalsConceded_Std'] = df['FirstHalfGoalsConceded'].rolling(window=window_long,
+                                                                                                 min_periods=1).std().shift(
+            1)
+        df[prefix + '_RollingFirstHalfGoalsScored_Mean_Short'] = df['FirstHalfGoalsScored'].rolling(window=window_short,
+                                                                                                    min_periods=1).mean().shift(
+            1)
+        df[prefix + '_Momentum_FirstHalfGoalsScored'] = df[prefix + '_RollingFirstHalfGoalsScored_Mean_Short'] - df[
+            prefix + '_RollingFirstHalfGoalsScored_Mean']
 
         # Function to compute trend slope using simple linear regression
         def compute_slope(x):
@@ -267,8 +334,11 @@ def prepare_data(file_path):
             xs = np.arange(len(x))
             return np.polyfit(xs, x, 1)[0]
 
-        df[prefix + '_Trend_Slope_GoalsScored'] = df['GoalsScored'].rolling(window=window_long, min_periods=2).apply(compute_slope, raw=True).shift(1)
-        df[prefix + '_Trend_Slope_FirstHalfGoalsScored'] = df['FirstHalfGoalsScored'].rolling(window=window_long, min_periods=2).apply(compute_slope, raw=True).shift(1)
+        df[prefix + '_Trend_Slope_GoalsScored'] = df['GoalsScored'].rolling(window=window_long, min_periods=2).apply(
+            compute_slope, raw=True).shift(1)
+        df[prefix + '_Trend_Slope_FirstHalfGoalsScored'] = df['FirstHalfGoalsScored'].rolling(window=window_long,
+                                                                                              min_periods=2).apply(
+            compute_slope, raw=True).shift(1)
 
         computed_cols = [
             prefix + '_RollingGoalsScored_Mean',
@@ -313,12 +383,63 @@ def prepare_data(file_path):
             for col in away_features.columns:
                 group.loc[away_mask, col] = away_features[col].values
 
+            # ----- Additional Goal Threshold Percentages -----
+            # Compute cumulative (season) and rolling (last 5 games) percentages for goals scored over thresholds.
+            # ----- Additional Goal Threshold Percentages -----
+            # For each threshold, compute season cumulative and rolling percentages.
+        for threshold in [1.5, 2.5, 3.5]:
+            # ----- Overall (Team as a Whole) -----
+            overall_season_col = f'Overall_Percent_Over_{threshold}'
+            overall_rolling_col = f'Overall_Rolling5_Percent_Over_{threshold}'
+            indicator_overall = group['GoalsScored'].gt(threshold)
+            # Using shift(1) to exclude the current match:
+            group[overall_season_col] = indicator_overall.shift(1).expanding(min_periods=1).mean()
+            group[overall_rolling_col] = indicator_overall.shift(1).rolling(window=5, min_periods=1).mean()
+
+            # ----- Home Matches Only -----
+            season_col_home = f'Home_Percent_Over_{threshold}'
+            rolling_col_home = f'Home_Rolling5_Percent_Over_{threshold}'
+            if home_mask.sum() > 0:
+                indicator_home = group.loc[home_mask, 'GoalsScored'].gt(threshold)
+                # Compute on the home subset and assign back to the group
+                group.loc[home_mask, season_col_home] = indicator_home.shift(1).expanding(min_periods=1).mean()
+                group.loc[home_mask, rolling_col_home] = indicator_home.shift(1).rolling(window=5, min_periods=1).mean()
+
+            # ----- Away Matches Only -----
+            season_col_away = f'Away_Percent_Over_{threshold}'
+            rolling_col_away = f'Away_Rolling5_Percent_Over_{threshold}'
+            if away_mask.sum() > 0:
+                indicator_away = group.loc[away_mask, 'GoalsScored'].gt(threshold)
+                group.loc[away_mask, season_col_away] = indicator_away.shift(1).expanding(min_periods=1).mean()
+                group.loc[away_mask, rolling_col_away] = indicator_away.shift(1).rolling(window=5, min_periods=1).mean()
+
+            # ----- Team-specific Match Outcome Percentages -----
+            # These features capture the percentage of matches in which the team has scored over a given goal threshold.
+        for threshold in [0.5, 1.5, 2.5, 3.5]:
+            # Overall (all matches)
+            overall_col = f'TeamPct_Over_{threshold}'
+            indicator_overall = group['GoalsScored'].gt(threshold)
+            # Use shift(1) to exclude the current match from its own calculation.
+            group[overall_col] = indicator_overall.shift(1).expanding(min_periods=1).mean()
+
+            # Home matches only
+            home_col = f'Home_TeamPct_Over_{threshold}'
+            if home_mask.sum() > 0:
+                indicator_home = group.loc[home_mask, 'GoalsScored'].gt(threshold)
+                group.loc[home_mask, home_col] = indicator_home.shift(1).expanding(min_periods=1).mean()
+
+            # Away matches only
+            away_col = f'Away_TeamPct_Over_{threshold}'
+            if away_mask.sum() > 0:
+                indicator_away = group.loc[away_mask, 'GoalsScored'].gt(threshold)
+                group.loc[away_mask, away_col] = indicator_away.shift(1).expanding(min_periods=1).mean()
+
         return group
 
     # Apply rolling feature engineering group-wise
     team_df = team_df.groupby(['country', 'season', 'Team'], group_keys=False) \
-                     .apply(add_rolling_features_split) \
-                     .reset_index(drop=True)
+        .apply(add_rolling_features_split) \
+        .reset_index(drop=True)
 
     # -----------------------------
     # Process Home-Team Features
@@ -359,11 +480,11 @@ def prepare_data(file_path):
     return match_df
 
 
-
 if __name__ == "__main__":
     start = time.time()
 
-    matches = prepare_data(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\cgmbetdatabase_top_5_2020+.csv")
+    #matches = prepare_data(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\cgmbetdatabase_top_5_2020+.csv")
+    matches = prepare_data(r"C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_2014.csv")
 
     # Process each league separately
     leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)
@@ -371,7 +492,8 @@ if __name__ == "__main__":
     for league in leagues:
         print(league)
         matches_filtered = matches[(matches['country'] == league[0])]
-        fl.run_models(matches_filtered, features, league, apply_pca=False)
+        if league[0] not in ('Eng1', 'Fra1', 'Spa1', 'Ger1'):
+            fl.run_models(matches_filtered, features, league, min_samples=200)
 
     end = time.time()
 
