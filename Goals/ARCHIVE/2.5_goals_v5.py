@@ -323,8 +323,8 @@ for league in leagues:
             # original_test_data["o2.5_odds"] = league_data.iloc[int(0.8 * len(league_data)):]["o2.5_odds"].values
             #
             # # Save train and test datasets with predictions
-            # train_filename = os.path.join(output_dir, f"{league[0]}_{league[1]}_{model_name}_train.csv")
-            # test_filename = os.path.join(output_dir, f"{league[0]}_{league[1]}_{model_name}_test.csv")
+            # train_filename = os.path_league.join(output_dir, f"{league[0]}_{league[1]}_{model_name}_train.csv")
+            # test_filename = os.path_league.join(output_dir, f"{league[0]}_{league[1]}_{model_name}_test.csv")
             # original_train_data.to_csv(train_filename, index=False)
             # original_test_data.to_csv(test_filename, index=False)
             # print(f"Saved train data to {train_filename} and test data to {test_filename}")

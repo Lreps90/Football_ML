@@ -1,4 +1,4 @@
-import datetime
+#import datetime
 import random as rd
 from collections import Counter
 import numpy as np
@@ -18,6 +18,7 @@ from sklearn.svm import SVC
 from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 from sklearn.calibration import CalibratedClassifierCV
+from datetime import datetime
 
 
 def create_import_file(df, output_file_path, provider="", market_name="", selection_name=""):
@@ -248,8 +249,8 @@ def select_optimal_pca_components(X, variance_threshold=0.95):
     cumulative_variance = np.cumsum(explained_variance)
 
     # Determine optimal number of components (e.g., components to explain 95% of variance).
-    optimal_components = np.argmax(cumulative_variance >= 0.95) + 1
-    print(f"Optimal number of components to explain 95% variance: {optimal_components}")
+    optimal_components = np.argmax(cumulative_variance >= variance_threshold) + 1
+    #print(f"Optimal number of components to explain 95% variance: {optimal_components}")
     return optimal_components
 
 def build_pipelines(apply_pca=True):
@@ -314,93 +315,93 @@ def build_pipelines(apply_pca=True):
             'classifier__batch_size': [32, 64]
         }
 
-        # SVC
-        pipelines['SVC'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('pca', PCA(svd_solver='randomized', random_state=42)),
-            ('classifier', SVC(probability=True))
-        ])
-        param_grids['SVC'] = {
-            'classifier__C': [0.1, 1, 10],
-            'classifier__kernel': ['rbf', 'linear'],
-            'classifier__gamma': ['scale', 'auto']
-        }
+        # # SVC
+        # pipelines['SVC'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('pca', PCA(svd_solver='randomized', random_state=42)),
+        #     ('classifier', SVC(probability=True))
+        # ])
+        # param_grids['SVC'] = {
+        #     'classifier__C': [0.1, 1, 10],
+        #     'classifier__kernel': ['rbf', 'linear'],
+        #     'classifier__gamma': ['scale', 'auto']
+        # }
 
-        # Logistic Regression
-        pipelines['LogisticRegression'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('pca', PCA(svd_solver='randomized', random_state=42)),
-            ('classifier', LogisticRegression(max_iter=10000))
-        ])
-        param_grids['LogisticRegression'] = {
-            'classifier__C': [0.1, 1, 10],
-            'classifier__solver': ['lbfgs', 'saga']
-        }
-
-        # K-Nearest Neighbours
-        pipelines['KNN'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('pca', PCA(svd_solver='randomized', random_state=42)),
-            ('classifier', KNeighborsClassifier())
-        ])
-        param_grids['KNN'] = {
-            'classifier__n_neighbors': [3, 5, 7],
-            'classifier__weights': ['uniform', 'distance']
-        }
-
-        # AdaBoost
-        pipelines['AdaBoost'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('pca', PCA(svd_solver='randomized', random_state=42)),
-            ('classifier', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
-        ])
-        param_grids['AdaBoost'] = {
-            'classifier__n_estimators': [50, 100],
-            'classifier__learning_rate': [0.5, 1.0]
-        }
-
-        # Stacking Ensembles
-        ensemble_configs = {
-            "StackingEnsemble1": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
-            ],
-            "StackingEnsemble2": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('mlp', MLPClassifier(random_state=42, max_iter=10000))
-            ],
-            "StackingEnsemble3": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('svc', SVC(probability=True))
-            ],
-            "StackingEnsemble4": [
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
-                ('knn', KNeighborsClassifier())
-            ],
-            "StackingEnsemble5": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
-                ('mlp', MLPClassifier(random_state=42, max_iter=10000))
-            ],
-        }
-        for ens_name, estimators in ensemble_configs.items():
-            stacking = StackingClassifier(
-                estimators=estimators,
-                final_estimator=LogisticRegression(max_iter=10000)
-            )
-            pipelines[ens_name] = Pipeline([
-                ('scaler', StandardScaler()),
-                ('pca', PCA(svd_solver='randomized', random_state=42)),
-                ('classifier', stacking)
-            ])
-            param_grids[ens_name] = {
-                'classifier__final_estimator__C': [0.1, 1, 10]
-            }
+        # # Logistic Regression
+        # pipelines['LogisticRegression'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('pca', PCA(svd_solver='randomized', random_state=42)),
+        #     ('classifier', LogisticRegression(max_iter=10000))
+        # ])
+        # param_grids['LogisticRegression'] = {
+        #     'classifier__C': [0.1, 1, 10],
+        #     'classifier__solver': ['lbfgs', 'saga']
+        # }
+        #
+        # # K-Nearest Neighbours
+        # pipelines['KNN'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('pca', PCA(svd_solver='randomized', random_state=42)),
+        #     ('classifier', KNeighborsClassifier())
+        # ])
+        # param_grids['KNN'] = {
+        #     'classifier__n_neighbors': [3, 5, 7],
+        #     'classifier__weights': ['uniform', 'distance']
+        # }
+        #
+        # # AdaBoost
+        # pipelines['AdaBoost'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('pca', PCA(svd_solver='randomized', random_state=42)),
+        #     ('classifier', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
+        # ])
+        # param_grids['AdaBoost'] = {
+        #     'classifier__n_estimators': [50, 100],
+        #     'classifier__learning_rate': [0.5, 1.0]
+        # }
+        #
+        # # Stacking Ensembles
+        # ensemble_configs = {
+        #     "StackingEnsemble1": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
+        #     ],
+        #     "StackingEnsemble2": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('mlp', MLPClassifier(random_state=42, max_iter=10000))
+        #     ],
+        #     "StackingEnsemble3": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('svc', SVC(probability=True))
+        #     ],
+        #     "StackingEnsemble4": [
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
+        #         ('knn', KNeighborsClassifier())
+        #     ],
+        #     "StackingEnsemble5": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
+        #         ('mlp', MLPClassifier(random_state=42, max_iter=10000))
+        #     ],
+        # }
+        # for ens_name, estimators in ensemble_configs.items():
+        #     stacking = StackingClassifier(
+        #         estimators=estimators,
+        #         final_estimator=LogisticRegression(max_iter=10000)
+        #     )
+        #     pipelines[ens_name] = Pipeline([
+        #         ('scaler', StandardScaler()),
+        #         ('pca', PCA(svd_solver='randomized', random_state=42)),
+        #         ('classifier', stacking)
+        #     ])
+        #     param_grids[ens_name] = {
+        #         'classifier__final_estimator__C': [0.1, 1, 10]
+        #     }
 
     else:
         # Build pipelines without PCA
@@ -448,88 +449,88 @@ def build_pipelines(apply_pca=True):
             'classifier__batch_size': [32, 64]
         }
 
-        pipelines['SVC'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('classifier', SVC(probability=True))
-        ])
-        param_grids['SVC'] = {
-            'classifier__C': [0.1, 1, 10],
-            'classifier__kernel': ['rbf', 'linear'],
-            'classifier__gamma': ['scale', 'auto']
-        }
+        # pipelines['SVC'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('classifier', SVC(probability=True))
+        # ])
+        # param_grids['SVC'] = {
+        #     'classifier__C': [0.1, 1, 10],
+        #     'classifier__kernel': ['rbf', 'linear'],
+        #     'classifier__gamma': ['scale', 'auto']
+        # }
 
-        pipelines['LogisticRegression'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('classifier', LogisticRegression(max_iter=10000))
-        ])
-        param_grids['LogisticRegression'] = {
-            'classifier__C': [0.1, 1, 10],
-            'classifier__solver': ['lbfgs', 'saga']
-        }
-
-        pipelines['KNN'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('classifier', KNeighborsClassifier())
-        ])
-        param_grids['KNN'] = {
-            'classifier__n_neighbors': [3, 5, 7],
-            'classifier__weights': ['uniform', 'distance']
-        }
-
-        pipelines['AdaBoost'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('classifier', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
-        ])
-        param_grids['AdaBoost'] = {
-            'classifier__n_estimators': [50, 100],
-            'classifier__learning_rate': [0.5, 1.0]
-        }
-
-        ensemble_configs = {
-            "StackingEnsemble1": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
-            ],
-            "StackingEnsemble2": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('mlp', MLPClassifier(random_state=42, max_iter=10000))
-            ],
-            "StackingEnsemble3": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('svc', SVC(probability=True))
-            ],
-            "StackingEnsemble4": [
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
-                ('knn', KNeighborsClassifier())
-            ],
-            "StackingEnsemble5": [
-                ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
-                ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
-                ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
-                ('mlp', MLPClassifier(random_state=42, max_iter=10000))
-            ],
-        }
-        for ens_name, estimators in ensemble_configs.items():
-            stacking = StackingClassifier(
-                estimators=estimators,
-                final_estimator=LogisticRegression(max_iter=10000)
-            )
-            pipelines[ens_name] = Pipeline([
-                ('scaler', StandardScaler()),
-                ('classifier', stacking)
-            ])
-            param_grids[ens_name] = {
-                'classifier__final_estimator__C': [0.1, 1, 10]
-            }
+        # pipelines['LogisticRegression'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('classifier', LogisticRegression(max_iter=10000))
+        # ])
+        # param_grids['LogisticRegression'] = {
+        #     'classifier__C': [0.1, 1, 10],
+        #     'classifier__solver': ['lbfgs', 'saga']
+        # }
+        #
+        # pipelines['KNN'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('classifier', KNeighborsClassifier())
+        # ])
+        # param_grids['KNN'] = {
+        #     'classifier__n_neighbors': [3, 5, 7],
+        #     'classifier__weights': ['uniform', 'distance']
+        # }
+        #
+        # pipelines['AdaBoost'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('classifier', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
+        # ])
+        # param_grids['AdaBoost'] = {
+        #     'classifier__n_estimators': [50, 100],
+        #     'classifier__learning_rate': [0.5, 1.0]
+        # }
+        #
+        # ensemble_configs = {
+        #     "StackingEnsemble1": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME'))
+        #     ],
+        #     "StackingEnsemble2": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('mlp', MLPClassifier(random_state=42, max_iter=10000))
+        #     ],
+        #     "StackingEnsemble3": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('svc', SVC(probability=True))
+        #     ],
+        #     "StackingEnsemble4": [
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
+        #         ('knn', KNeighborsClassifier())
+        #     ],
+        #     "StackingEnsemble5": [
+        #         ('xgb', XGBClassifier(random_state=42, eval_metric='logloss')),
+        #         ('rf', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        #         ('ada', AdaBoostClassifier(random_state=42, algorithm='SAMME')),
+        #         ('mlp', MLPClassifier(random_state=42, max_iter=10000))
+        #     ],
+        # }
+        # for ens_name, estimators in ensemble_configs.items():
+        #     stacking = StackingClassifier(
+        #         estimators=estimators,
+        #         final_estimator=LogisticRegression(max_iter=10000)
+        #     )
+        #     pipelines[ens_name] = Pipeline([
+        #         ('scaler', StandardScaler()),
+        #         ('classifier', stacking)
+        #     ])
+        #     param_grids[ens_name] = {
+        #         'classifier__final_estimator__C': [0.1, 1, 10]
+        #     }
 
     return pipelines, param_grids
 
 
-def run_models(data, features, filename_feature, min_samples=100, apply_pca=True):
+def run_models(data, features, filename_feature, min_samples=100, apply_pca=True, precision_test_threshold = 0.5):
     """
     Run grid-search experiments over different models.
     If apply_pca is True, PCA is applied using various variance thresholds
@@ -585,7 +586,7 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
 
     metrics_list = []
 
-    for apply_pca in [True, False]:
+    for apply_pca in [False]:
         # If PCA is not applied, use a dummy variance threshold list.
         if apply_pca:
             var_thresholds = [0.9, 0.92, 0.94, 0.96, 0.98]
@@ -704,8 +705,7 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
                                     recall_ratio = train_recall / (test_recall + 1e-10)
 
                                 # Save metrics if performance criteria are met
-                                if (auc_ratio > 0.8 and
-                                        precision_ratio > 0.8):
+                                if (precision_ratio >= 0.9) and (test_precision >= precision_test_threshold):
                                     metrics_list.append({
                                         'Model': model_name,
                                         'SMOTE': smote_label,
@@ -816,8 +816,7 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
                                 recall_ratio = train_recall / (test_recall + 1e-10)
 
                             # Save metrics if performance criteria are met
-                            if (auc_ratio > 0.8 and
-                                    precision_ratio > 0.8):
+                            if (precision_ratio >= 0.9) and (test_precision >= precision_test_threshold):
                                 metrics_list.append({
                                     'Model': model_name,
                                     'SMOTE': smote_label,
@@ -842,18 +841,24 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
                                     'Recall_Test/Train_Ratio': round(recall_ratio, 4),
                                     'Train_Sample_Size': train_sample_size,
                                     'Test_Sample_Size': test_sample_size,
-                                    'Var_Threshold': var_threshold,
+                                    #'Var_Threshold': var_threshold,
                                     'Params': params
                                 })
 
     print(f"Total tests performed: {master_test_counter}")
     # Save the results to a CSV file with a timestamp in the filename that includes the filename_feature.
-    filename_out = f"model_metrics_{filename_feature}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename_out = f"model_metrics_{filename_feature}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     metrics_df = pd.DataFrame(metrics_list)
     # Sort by Precision_Test (greatest at the top)
-    metrics_df.sort_values(by='Precision_Test', ascending=False, inplace=True)
-    metrics_df.to_csv(filename_out, index=False)
-    print(f"Model metrics saved to {filename_out}")
+    if not metrics_df.empty:
+        metrics_df.sort_values(by='Test_Sample_Size', ascending=False, inplace=True)
+        metrics_df.to_csv(filename_out, index=False)
+        print(f"Model metrics saved to {filename_out}")
+    else:
+        metrics_df.to_csv(filename_out, index=False)
+        print(f"Model metrics saved to {filename_out}")
+        #print(f"No metrics were recorded for {filename_feature}.")
+
 
 
 def run_models_with_probs(data, features, filename_feature, min_samples=100, apply_calibration=True):
@@ -1043,3 +1048,22 @@ def run_models_with_probs(data, features, filename_feature, min_samples=100, app
     metrics_df.sort_values(by='Precision_Test', ascending=False, inplace=True)
     metrics_df.to_csv(filename_out, index=False)
     print(f"Model metrics saved to {filename_out}")
+
+
+
+def pre_prepared_data(file_path):
+    data = pd.read_csv(file_path,
+                       low_memory=False)
+    # Convert 'date' column to datetime object
+    data['date'] = pd.to_datetime(data['date'], format="%Y-%m-%d", errors='coerce')
+    data = data.sort_values(by='date')
+
+    # Convert today's date to a pandas Timestamp for compatibility.
+    today = pd.Timestamp(datetime.today().date())
+    data = data[data['date'] <= today]
+
+    # Clean up and finalise the match-level DataFrame
+    data.dropna(inplace=True)
+    data['total_goals'] = data['home_goals_ft'] + data['away_goals_ft']
+    data['target'] = data['total_goals'].apply(lambda x: 1 if x > 2.5 else 0)
+    return data

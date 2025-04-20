@@ -235,7 +235,7 @@ def prepare_data(file_path):
     data = data[data['date'] <= today]
 
     data['total_corners'] = data['corners_home'] + data['corners_away']
-    data['target'] = data['total_corners'].apply(lambda x: 1 if x > 10.5 else 0)
+    data['target'] = data['total_corners'].apply(lambda x: 1 if x > 9.5 else 0)
 
     return data
 
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     for league in leagues:
         print(league)
         matches_filtered = matches[(matches['country'] == league[0])]
-        fl.run_models_with_probs(matches_filtered, features, league, min_samples=200)
+        fl.run_models(matches_filtered, features, league, min_samples=100)
 
     end = time.time()
 

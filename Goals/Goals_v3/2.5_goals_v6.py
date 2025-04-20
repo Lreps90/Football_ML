@@ -1,12 +1,14 @@
 import time
 from datetime import datetime
-
 import numpy as np
 import pandas as pd
-
+import re
+import glob
 import function_library as fl
+import importlib
+importlib.reload(fl)
 
-features = [
+features_old = [
     # General
     'round',
     'home_team_place_total',
@@ -131,6 +133,298 @@ features = [
     'away_Away_TeamPct_Over_1.5',
     'away_Away_TeamPct_Over_2.5',
     'away_Away_TeamPct_Over_3.5'
+]
+
+features = [
+    # 'Unnamed: 0',
+    # 'country',
+    # 'season',
+    # 'date',
+    # 'ko_time',
+    'round',
+    # 'home_team',
+    # 'away_team',
+    # 'home_goals_ft',
+    # 'away_goals_ft',
+    # 'home_goals_ht',
+    # 'away_goals_ht',
+    'home_team_place_total',
+    'home_team_place_home',
+    'away_team_place_total',
+    'away_team_place_away',
+    'home_odds',
+    'draw_odds',
+    'away_odds',
+    'over_25_odds',
+    'under_25_odds',
+    'elo_home',
+    'elo_away',
+    'form_home',
+    'form_away',
+    # 'shots_home',
+    # 'shots_home_1h',
+    # 'shots_home_2h',
+    # 'shots_away',
+    # 'shots_away_1h',
+    # 'shots_away_2h',
+    # 'shots_on_target_home',
+    # 'shots_on_target_home_1h',
+    # 'shots_on_target_home_2h',
+    # 'shots_on_target_away',
+    # 'shots_on_target_away_1h',
+    # 'shots_on_target_away_2h',
+    # 'corners_home',
+    # 'corners_home_1h',
+    # 'corners_home_2h',
+    # 'corners_away',
+    # 'corners_away_1h',
+    # 'corners_away_2h',
+    # 'fouls_home',
+    # 'fouls_home_1h',
+    # 'fouls_home_2h',
+    # 'fouls_away',
+    # 'fouls_away_1h',
+    # 'fouls_away_2h',
+    # 'yellow_cards_home',
+    # 'yellow_cards_home_1h',
+    # 'yellow_cards_home_2h',
+    # 'yellow_cards_away',
+    # 'yellow_cards_away_1h',
+    # 'yellow_cards_away_2h',
+    # 'possession_home',
+    # 'possession_home_1h',
+    # 'possession_home_2h',
+    # 'possession_away',
+    # 'possession_away_1h',
+    # 'possession_away_2h',
+    # 'goals_scored_total_home',
+    # 'goals_conceded_total_home',
+    # 'goals_scored_total_away',
+    # 'goals_conceded_total_away',
+    # 'points_home',
+    # 'points_away',
+    # 'is_home_x',
+    'home_Overall_Rolling_GoalsScored_Mean',
+    'home_Overall_Rolling_GoalsScored_Std',
+    'home_Overall_Rolling_GoalsScored_Mean_Short',
+    'home_Overall_Momentum_GoalsScored',
+    'home_Overall_Trend_Slope_GoalsScored',
+    'home_Overall_Rolling_FirstHalfGoalsScored_Mean',
+    'home_Overall_Rolling_FirstHalfGoalsScored_Std',
+    'home_Overall_Rolling_FirstHalfGoalsScored_Mean_Short',
+    'home_Overall_Momentum_FirstHalfGoalsScored',
+    'home_Overall_Trend_Slope_FirstHalfGoalsScored',
+    'home_Overall_Rolling_Shots_Mean',
+    'home_Overall_Rolling_Shots_Std',
+    'home_Overall_Rolling_Shots_Mean_Short',
+    'home_Overall_Momentum_Shots',
+    'home_Overall_Trend_Slope_Shots',
+    'home_Overall_Rolling_Shots_1h_Mean',
+    'home_Overall_Rolling_Shots_1h_Std',
+    'home_Overall_Rolling_Shots_1h_Mean_Short',
+    'home_Overall_Momentum_Shots_1h',
+    'home_Overall_Trend_Slope_Shots_1h',
+    'home_Overall_Rolling_Corners_Mean',
+    'home_Overall_Rolling_Corners_Std',
+    'home_Overall_Rolling_Corners_Mean_Short',
+    'home_Overall_Momentum_Corners',
+    'home_Overall_Trend_Slope_Corners',
+    'home_Overall_Rolling_Corners_1h_Mean',
+    'home_Overall_Rolling_Corners_1h_Std',
+    'home_Overall_Rolling_Corners_1h_Mean_Short',
+    'home_Overall_Momentum_Corners_1h',
+    'home_Overall_Trend_Slope_Corners_1h',
+    'home_Overall_Rolling_ShotsOnTarget_Mean',
+    'home_Overall_Rolling_ShotsOnTarget_Std',
+    'home_Overall_Rolling_ShotsOnTarget_Mean_Short',
+    'home_Overall_Momentum_ShotsOnTarget',
+    'home_Overall_Trend_Slope_ShotsOnTarget',
+    'home_Overall_Rolling_ShotsOnTarget_1h_Mean',
+    'home_Overall_Rolling_ShotsOnTarget_1h_Std',
+    'home_Overall_Rolling_ShotsOnTarget_1h_Mean_Short',
+    'home_Overall_Momentum_ShotsOnTarget_1h',
+    'home_Overall_Trend_Slope_ShotsOnTarget_1h',
+    'home_Rolling_GoalsScored_Mean',
+    'home_Rolling_GoalsScored_Std',
+    'home_Rolling_GoalsScored_Mean_Short',
+    'home_Momentum_GoalsScored',
+    'home_Trend_Slope_GoalsScored',
+    'home_Rolling_FirstHalfGoalsScored_Mean',
+    'home_Rolling_FirstHalfGoalsScored_Std',
+    'home_Rolling_FirstHalfGoalsScored_Mean_Short',
+    'home_Momentum_FirstHalfGoalsScored',
+    'home_Trend_Slope_FirstHalfGoalsScored',
+    'home_Rolling_Shots_Mean',
+    'home_Rolling_Shots_Std',
+    'home_Rolling_Shots_Mean_Short',
+    'home_Momentum_Shots',
+    'home_Trend_Slope_Shots',
+    'home_Rolling_Shots_1h_Mean',
+    'home_Rolling_Shots_1h_Std',
+    'home_Rolling_Shots_1h_Mean_Short',
+    'home_Momentum_Shots_1h',
+    'home_Trend_Slope_Shots_1h',
+    'home_Rolling_Corners_Mean',
+    'home_Rolling_Corners_Std',
+    'home_Rolling_Corners_Mean_Short',
+    'home_Momentum_Corners',
+    'home_Trend_Slope_Corners',
+    'home_Rolling_Corners_1h_Mean',
+    'home_Rolling_Corners_1h_Std',
+    'home_Rolling_Corners_1h_Mean_Short',
+    'home_Momentum_Corners_1h',
+    'home_Trend_Slope_Corners_1h',
+    'home_Rolling_ShotsOnTarget_Mean',
+    'home_Rolling_ShotsOnTarget_Std',
+    'home_Rolling_ShotsOnTarget_Mean_Short',
+    'home_Momentum_ShotsOnTarget',
+    'home_Trend_Slope_ShotsOnTarget',
+    'home_Rolling_ShotsOnTarget_1h_Mean',
+    'home_Rolling_ShotsOnTarget_1h_Std',
+    'home_Rolling_ShotsOnTarget_1h_Mean_Short',
+    'home_Momentum_ShotsOnTarget_1h',
+    'home_Trend_Slope_ShotsOnTarget_1h',
+    'home_Overall_Percent_Over_1.5',
+    'home_Overall_Rolling5_Percent_Over_1.5',
+    'home_Percent_Over_1.5',
+    'home_Rolling5_Percent_Over_1.5',
+    'home_Overall_Percent_Over_2.5',
+    'home_Overall_Rolling5_Percent_Over_2.5',
+    'home_Percent_Over_2.5',
+    'home_Rolling5_Percent_Over_2.5',
+    'home_Overall_Percent_Over_3.5',
+    'home_Overall_Rolling5_Percent_Over_3.5',
+    'home_Percent_Over_3.5',
+    'home_Rolling5_Percent_Over_3.5',
+    'home_TeamPct_Over_0.5',
+    'home_TeamPct_Over_1.5',
+    'home_TeamPct_Over_2.5',
+    'home_TeamPct_Over_3.5',
+    'home_CornersPct_Over_3.5',
+    'home_CornersRolling5Pct_Over_3.5',
+    'home_CornersPct_Over_4.5',
+    'home_CornersRolling5Pct_Over_4.5',
+    'home_CornersPct_Over_5.5',
+    'home_CornersRolling5Pct_Over_5.5',
+    'home_CornersPct_Over_6.5',
+    'home_CornersRolling5Pct_Over_6.5',
+    'home_SeasonPct_Over_9.5',
+    'home_Rolling5Pct_Over_9.5',
+    'home_SeasonPct_Over_10.5',
+    'home_Rolling5Pct_Over_10.5',
+    'home_SeasonPct_Over_11.5',
+    'home_Rolling5Pct_Over_11.5',
+    # 'is_home_y',
+    'away_Overall_Rolling_GoalsScored_Mean',
+    'away_Overall_Rolling_GoalsScored_Std',
+    'away_Overall_Rolling_GoalsScored_Mean_Short',
+    'away_Overall_Momentum_GoalsScored',
+    'away_Overall_Trend_Slope_GoalsScored',
+    'away_Overall_Rolling_FirstHalfGoalsScored_Mean',
+    'away_Overall_Rolling_FirstHalfGoalsScored_Std',
+    'away_Overall_Rolling_FirstHalfGoalsScored_Mean_Short',
+    'away_Overall_Momentum_FirstHalfGoalsScored',
+    'away_Overall_Trend_Slope_FirstHalfGoalsScored',
+    'away_Overall_Rolling_Shots_Mean',
+    'away_Overall_Rolling_Shots_Std',
+    'away_Overall_Rolling_Shots_Mean_Short',
+    'away_Overall_Momentum_Shots',
+    'away_Overall_Trend_Slope_Shots',
+    'away_Overall_Rolling_Shots_1h_Mean',
+    'away_Overall_Rolling_Shots_1h_Std',
+    'away_Overall_Rolling_Shots_1h_Mean_Short',
+    'away_Overall_Momentum_Shots_1h',
+    'away_Overall_Trend_Slope_Shots_1h',
+    'away_Overall_Rolling_Corners_Mean',
+    'away_Overall_Rolling_Corners_Std',
+    'away_Overall_Rolling_Corners_Mean_Short',
+    'away_Overall_Momentum_Corners',
+    'away_Overall_Trend_Slope_Corners',
+    'away_Overall_Rolling_Corners_1h_Mean',
+    'away_Overall_Rolling_Corners_1h_Std',
+    'away_Overall_Rolling_Corners_1h_Mean_Short',
+    'away_Overall_Momentum_Corners_1h',
+    'away_Overall_Trend_Slope_Corners_1h',
+    'away_Overall_Rolling_ShotsOnTarget_Mean',
+    'away_Overall_Rolling_ShotsOnTarget_Std',
+    'away_Overall_Rolling_ShotsOnTarget_Mean_Short',
+    'away_Overall_Momentum_ShotsOnTarget',
+    'away_Overall_Trend_Slope_ShotsOnTarget',
+    'away_Overall_Rolling_ShotsOnTarget_1h_Mean',
+    'away_Overall_Rolling_ShotsOnTarget_1h_Std',
+    'away_Overall_Rolling_ShotsOnTarget_1h_Mean_Short',
+    'away_Overall_Momentum_ShotsOnTarget_1h',
+    'away_Overall_Trend_Slope_ShotsOnTarget_1h',
+    'away_Rolling_GoalsScored_Mean',
+    'away_Rolling_GoalsScored_Std',
+    'away_Rolling_GoalsScored_Mean_Short',
+    'away_Momentum_GoalsScored',
+    'away_Trend_Slope_GoalsScored',
+    'away_Rolling_FirstHalfGoalsScored_Mean',
+    'away_Rolling_FirstHalfGoalsScored_Std',
+    'away_Rolling_FirstHalfGoalsScored_Mean_Short',
+    'away_Momentum_FirstHalfGoalsScored',
+    'away_Trend_Slope_FirstHalfGoalsScored',
+    'away_Rolling_Shots_Mean',
+    'away_Rolling_Shots_Std',
+    'away_Rolling_Shots_Mean_Short',
+    'away_Momentum_Shots',
+    'away_Trend_Slope_Shots',
+    'away_Rolling_Shots_1h_Mean',
+    'away_Rolling_Shots_1h_Std',
+    'away_Rolling_Shots_1h_Mean_Short',
+    'away_Momentum_Shots_1h',
+    'away_Trend_Slope_Shots_1h',
+    'away_Rolling_Corners_Mean',
+    'away_Rolling_Corners_Std',
+    'away_Rolling_Corners_Mean_Short',
+    'away_Momentum_Corners',
+    'away_Trend_Slope_Corners',
+    'away_Rolling_Corners_1h_Mean',
+    'away_Rolling_Corners_1h_Std',
+    'away_Rolling_Corners_1h_Mean_Short',
+    'away_Momentum_Corners_1h',
+    'away_Trend_Slope_Corners_1h',
+    'away_Rolling_ShotsOnTarget_Mean',
+    'away_Rolling_ShotsOnTarget_Std',
+    'away_Rolling_ShotsOnTarget_Mean_Short',
+    'away_Momentum_ShotsOnTarget',
+    'away_Trend_Slope_ShotsOnTarget',
+    'away_Rolling_ShotsOnTarget_1h_Mean',
+    'away_Rolling_ShotsOnTarget_1h_Std',
+    'away_Rolling_ShotsOnTarget_1h_Mean_Short',
+    'away_Momentum_ShotsOnTarget_1h',
+    'away_Trend_Slope_ShotsOnTarget_1h',
+    'away_Overall_Percent_Over_1.5',
+    'away_Overall_Rolling5_Percent_Over_1.5',
+    'away_Percent_Over_1.5',
+    'away_Rolling5_Percent_Over_1.5',
+    'away_Overall_Percent_Over_2.5',
+    'away_Overall_Rolling5_Percent_Over_2.5',
+    'away_Percent_Over_2.5',
+    'away_Rolling5_Percent_Over_2.5',
+    'away_Overall_Percent_Over_3.5',
+    'away_Overall_Rolling5_Percent_Over_3.5',
+    'away_Percent_Over_3.5',
+    'away_Rolling5_Percent_Over_3.5',
+    'away_TeamPct_Over_0.5',
+    'away_TeamPct_Over_1.5',
+    'away_TeamPct_Over_2.5',
+    'away_TeamPct_Over_3.5',
+    'away_CornersPct_Over_3.5',
+    'away_CornersRolling5Pct_Over_3.5',
+    'away_CornersPct_Over_4.5',
+    'away_CornersRolling5Pct_Over_4.5',
+    'away_CornersPct_Over_5.5',
+    'away_CornersRolling5Pct_Over_5.5',
+    'away_CornersPct_Over_6.5',
+    'away_CornersRolling5Pct_Over_6.5',
+    'away_SeasonPct_Over_9.5',
+    'away_Rolling5Pct_Over_9.5',
+    'away_SeasonPct_Over_10.5',
+    'away_Rolling5Pct_Over_10.5',
+    'away_SeasonPct_Over_11.5',
+    'away_Rolling5Pct_Over_11.5'
 ]
 
 
@@ -480,20 +774,54 @@ def prepare_data(file_path):
     return match_df
 
 
+
+
+
+
+def extract_identifiers(directory: str) -> tuple:
+    """
+    Extracts identifiers from filenames in the specified directory.
+
+    The filenames should follow the pattern:
+    model_metrics_('Identifier',)_YYYYMMDD_HHMMSS.csv
+
+    Args:
+        directory (str): The directory to search for matching files.
+
+    Returns:
+        tuple: A tuple containing the extracted identifiers.
+    """
+    # Compile a regular expression to capture the text inside the quotes.
+    pattern = re.compile(r"model_metrics_\('([^']+)',\)_\d{8}_\d{6}\.csv")
+
+    # Use glob to find all files starting with 'model_metrics_' and ending with '.csv'
+    files = glob.glob(directory + r"\model_metrics_*.csv")
+
+    # Extract the identifier from each file if it matches the pattern
+    identifiers = tuple(match.group(1) for file in files if (match := pattern.search(file)) is not None)
+
+    return identifiers
+
 if __name__ == "__main__":
+
     start = time.time()
 
     #matches = prepare_data(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\cgmbetdatabase_top_5_2020+.csv")
-    matches = prepare_data(r"C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_2014.csv")
+    matches = fl.pre_prepared_data(r"C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_ALL_2017+.csv")
 
     # Process each league separately
     leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)
 
+    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Goals_v3"
+    league_tuple = extract_identifiers(directory)
+
     for league in leagues:
         print(league)
+        test = league[0]
         matches_filtered = matches[(matches['country'] == league[0])]
-        if league[0] not in ('Eng1', 'Fra1', 'Spa1', 'Ger1'):
-            fl.run_models(matches_filtered, features, league, min_samples=200)
+        if league[0] not in league_tuple and league[0] != 'Swi2':
+            if league[0] != 'Aus1':
+                fl.run_models(matches_filtered, features, league, min_samples=100)
 
     end = time.time()
 
