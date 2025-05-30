@@ -776,31 +776,38 @@ def prepare_data(file_path):
 
 
 
+import re
+from pathlib import Path
+from typing import Tuple
 
-
-def extract_identifiers(directory: str) -> tuple:
+def extract_identifiers(directory: str) -> Tuple[str, ...]:
     """
-    Extracts identifiers from filenames in the specified directory.
+    Extracts identifiers from CSV filenames in the specified directory (recursively).
 
-    The filenames should follow the pattern:
-    model_metrics_('Identifier',)_YYYYMMDD_HHMMSS.csv
+    The filenames should end with:
+        _('Identifier',)_YYYYMMDD_HHMMSS.csv
+
+    e.g.
+        value_betting_top10_('Aus1',)_20250510_091217.csv
 
     Args:
-        directory (str): The directory to search for matching files.
+        directory (str): Path to the top-level folder to search.
 
     Returns:
-        tuple: A tuple containing the extracted identifiers.
+        Tuple[str, ...]: All identifiers found inside the quotes.
     """
-    # Compile a regular expression to capture the text inside the quotes.
-    pattern = re.compile(r"model_metrics_\('([^']+)',\)_\d{8}_\d{6}\.csv")
+    # Regex: anything_, then _('ID',), then _YYYYMMDD_HHMMSS.csv at the end
+    pattern = re.compile(r".*_\('([^']+)',\)_\d{8}_\d{6}\.csv$")
 
-    # Use glob to find all files starting with 'model_metrics_' and ending with '.csv'
-    files = glob.glob(directory + r"\model_metrics_*.csv")
+    identifiers = []
+    for csv_path in Path(directory).rglob("*.csv"):
+        match = pattern.match(csv_path.name)
+        if match:
+            identifiers.append(match.group(1))
 
-    # Extract the identifier from each file if it matches the pattern
-    identifiers = tuple(match.group(1) for file in files if (match := pattern.search(file)) is not None)
+    return tuple(identifiers)
 
-    return identifiers
+
 
 if __name__ == "__main__":
 
@@ -812,16 +819,21 @@ if __name__ == "__main__":
     # Process each league separately
     leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)
 
-    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Goals_v3"
+    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Goals_v3\best_models_per_league_v4"
     league_tuple = extract_identifiers(directory)
 
-    for league in leagues:
+    for i, league in enumerate(leagues, start=1):
+        print(f"Processing league {i}/{len(leagues)}")
         print(league)
         test = league[0]
         matches_filtered = matches[(matches['country'] == league[0])]
-        if league[0] not in league_tuple and league[0] != 'Swi2':
-            if league[0] != 'Aus1':
-                fl.run_models(matches_filtered, features, league, min_samples=100)
+        if league[0] not in league_tuple:
+            #fl.run_value_betting(matches_filtered, features, filename_feature=league)
+            fl.run_models_with_probs_v2(matches_filtered, features, filename_feature=league)
+
+        # if league[0] not in league_tuple and league[0] != 'Swi2':
+        #     if league[0] != 'Aus1':
+        #         fl.run_models(matches_filtered, features, league, min_samples=50, precision_test_threshold = 0.6)
 
     end = time.time()
 

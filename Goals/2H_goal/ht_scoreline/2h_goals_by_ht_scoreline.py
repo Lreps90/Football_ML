@@ -5,6 +5,10 @@ import pandas as pd
 import re
 import glob
 import function_library as fl
+import os
+import re
+import glob
+from typing import Tuple
 
 features_old = [
     # General
@@ -792,42 +796,44 @@ def pre_prepared_data(file_path):
 
 
 
-def extract_identifiers(directory: str) -> tuple:
+def extract_scores(directory: str) -> Tuple[str, ...]:
     """
-    Extracts identifiers from filenames in the specified directory.
-
-    The filenames should follow the pattern:
-    model_metrics_('Identifier',)_YYYYMMDD_HHMMSS.csv
+    Scans `directory` for files named like
+        model_metrics_('home-away',)_YYYYMMDD_HHMMSS.csv
+    and returns the tuple of all the 'home-away' strings it finds.
 
     Args:
-        directory (str): The directory to search for matching files.
+        directory (str): Path to the folder containing your CSVs.
 
     Returns:
-        tuple: A tuple containing the extracted identifiers.
+        Tuple[str, ...]: All the HT score identifiers (e.g. "0-0", "1-2") already modelled.
     """
-    # Compile a regular expression to capture the text inside the quotes.
-    pattern = re.compile(r"model_metrics_\('([^']+)',\)_\d{8}_\d{6}\.csv")
-
-    # Use glob to find all files starting with 'model_metrics_' and ending with '.csv'
-    files = glob.glob(directory + r"\model_metrics_*.csv")
-
-    # Extract the identifier from each file if it matches the pattern
-    identifiers = tuple(match.group(1) for file in files if (match := pattern.search(file)) is not None)
-
-    return identifiers
+    pattern = re.compile(r"^model_metrics_\('([^']+)',\)_\d{8}_\d{6}\.csv$")
+    search = os.path.join(directory, "model_metrics_*.csv")
+    out = []
+    for filepath in glob.glob(search):
+        name = os.path.basename(filepath)
+        m = pattern.match(name)
+        if m:
+            out.append(m.group(1))
+    return tuple(out)
 
 if __name__ == "__main__":
     start = time.time()
 
-    #matches = prepare_data(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\cgmbetdatabase_top_5_2020+.csv")
-    matches = pre_prepared_data(r'/engineered_master_data_ALL_2017+.csv')
+    matches = pre_prepared_data(r'C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_ALL_2017+.csv')
+
 
     # Process each league separately
     leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)
     ht_scores = matches[['ht_score']].drop_duplicates().apply(tuple, axis=1)
 
-    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal"
-    league_tuple = extract_identifiers(directory)
+    matches = pd.get_dummies(matches, columns=['country'], prefix='country')
+    dummy_cols = [col for col in matches.columns if col.startswith('country_')]
+    features = features + dummy_cols
+
+    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
+    scoreline_tuple = extract_scores(directory)
 
     #for league in leagues:
     for ht_score in ht_scores:
@@ -835,9 +841,12 @@ if __name__ == "__main__":
         test = ht_score[0]
         matches_filtered = matches[(matches['ht_score'] == ht_score[0])]
         if matches_filtered.shape[0] >= 1000:
-            fl.run_models(matches_filtered, features, ht_score, min_samples=200, precision_test_threshold = 0.8)
+            if ht_score[0] not in scoreline_tuple:
+                fl.run_models(matches_filtered, features, ht_score, min_samples=200, precision_test_threshold = 0.85)
+            else:
+                print("Scoreline already modelled...")
         else:
-            print("Not enough samples")
+            print("Not enough samples...")
 
     end = time.time()
 

@@ -6,7 +6,6 @@ import re
 import glob
 import function_library as fl
 import os
-import ast
 
 features_old = [
     # General
@@ -792,85 +791,63 @@ def pre_prepared_data(file_path):
     return data
 
 
-def extract_identifiers(directory: str) -> tuple[tuple, ...]:
+
+
+def extract_identifiers(directory: str) -> tuple:
     """
-    Extracts the identifier tuple from filenames like:
-      model_metrics_('England', '1-0')_YYYYMMDD_HHMMSS.csv
-    Returns a tuple of real Python tuples, e.g. (('England','1-0'), ('Spain','2-1'), …)
+    Extracts identifiers from filenames in the specified directory.
+
+    The filenames should follow the pattern:
+    model_metrics_('Identifier',)_YYYYMMDD_HHMMSS.csv
+
+    Args:
+        directory (str): The directory to search for matching files.
+
+    Returns:
+        tuple: A tuple containing the extracted identifiers.
     """
-    pattern = re.compile(r"model_metrics_(.+?)_\d{8}_\d{6}\.csv")
+    # Compile a regular expression to capture the identifier
+    pattern = re.compile(r"model_metrics_\('([^']+)',\)_\d{8}_\d{6}\.csv")
+
+    # Use glob to find matching files (handle cross-platform paths)
     search_path = os.path.join(directory, "model_metrics_*.csv")
-    identifiers = []
-    for filepath in glob.glob(search_path):
-        name = os.path.basename(filepath)
-        m = pattern.search(name)
-        if not m:
-            continue
-        # m.group(1) is a string like "('England', '1-0')"
-        identifiers.append(ast.literal_eval(m.group(1)))
-    return tuple(identifiers)
+    files = glob.glob(search_path)
 
-def main():
-    start_time = time.time()
-
-    # 1) Load your data
-    data_path = r'C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_ALL_2017+.csv'
-    matches = pre_prepared_data(data_path)
-
-    # 2) Build lists of unique leagues and half‑time scores
-    leagues   = matches[['country' ]].drop_duplicates().apply(tuple, axis=1)
-    ht_scores = matches[['ht_score']].drop_duplicates().apply(tuple, axis=1)
-
-    # 3) Find which (league, ht_score) combinations have already been processed
-    models_dir = (
-        r"C:\Users\leere\PycharmProjects\Football_ML3\Goals"
-        r"\2H_goal\league_and_ht_scoreline\best_models_by_league_and_ht_scoreline"
+    # Extract identifiers from filenames
+    identifiers = tuple(
+        match.group(1) for file in files if (match := pattern.search(os.path.basename(file))) is not None
     )
-    processed = set(extract_identifiers(models_dir))
 
-    # 4) Set up counters for progress reporting
-    num_leagues   = len(leagues)
-    num_scores    = len(ht_scores)
-    total_combos  = num_leagues * num_scores
-    combo_counter = 0
-
-    # 5) Iterate and run models where needed
-    for i, league in enumerate(leagues, start=1):
-        for j, ht_score in enumerate(ht_scores, start=1):
-            combo_counter += 1
-            combo = (league[0], ht_score[0])
-            print(
-                f"[{combo_counter}/{total_combos}] "
-                f"League {i}/{num_leagues}, Score {j}/{num_scores} → {combo}"
-            )
-
-            if combo in processed:
-                print(f"{combo} has already been processed\n")
-                continue
-
-            # Filter your matches for this combo
-            filt = (
-                (matches['country'] == combo[0]) &
-                (matches['ht_score'] == combo[1])
-            )
-            matches_filtered = matches[filt]
-
-            if len(matches_filtered) < 250:
-                print(f"Not enough samples for {combo} (found {len(matches_filtered)})\n")
-                continue
-
-            # Run your modelling function
-            fl.run_models(
-                matches_filtered,
-                features,
-                combo,
-                min_samples=50,
-                precision_test_threshold=0.8
-            )
-            print()  # blank line for readability
-
-    elapsed = time.time() - start_time
-    print(f"All done! Total time: {elapsed:.2f} seconds")
+    return identifiers
 
 if __name__ == "__main__":
-    main()
+    start = time.time()
+
+    matches = pre_prepared_data(r'/engineered_master_data_ALL_2017+.csv')
+
+    # Process each league separately
+    leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)
+    ht_scores = matches[['ht_score']].drop_duplicates().apply(tuple, axis=1)
+
+    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\league\best_models_by_league"
+    league_tuple = extract_identifiers(directory)
+
+    for i, league in enumerate(leagues, start=1):
+        print(f"{league}: Processing league {i}/{len(leagues)}")
+        if league[0] not in league_tuple:
+            matches_filtered = matches[(matches['country'] == league[0])]
+            if matches_filtered.shape[0] >= 500:
+                fl.run_models(matches_filtered, features, league, min_samples=50, precision_test_threshold = 0.85)
+            else:
+                print("Not enough samples")
+        else:
+            print(f"{league} has already been processed")
+
+    end = time.time()
+
+    elapsed_time = end - start  # Calculate elapsed time in seconds
+
+    # Print the elapsed time in seconds, minutes, and hours:
+    print("Elapsed time in seconds: {:.2f}".format(elapsed_time))
+    print("Elapsed time in minutes: {:.2f}".format(elapsed_time / 60))
+    print("Elapsed time in hours:   {:.2f}".format(elapsed_time / 3600))

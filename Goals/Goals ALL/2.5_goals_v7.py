@@ -5,7 +5,8 @@ import pandas as pd
 import re
 import glob
 import function_library as fl
-import os
+import importlib
+importlib.reload(fl)
 
 features_old = [
     # General
@@ -772,73 +773,61 @@ def prepare_data(file_path):
 
     return match_df
 
-def pre_prepared_data(file_path):
-    data = pd.read_csv(file_path,
-                       low_memory=False)
-    # Convert 'date' column to datetime object
-    data['date'] = pd.to_datetime(data['date'], format="%Y-%m-%d", errors='coerce')
-    data = data.sort_values(by='date')
-
-    # Convert today's date to a pandas Timestamp for compatibility.
-    today = pd.Timestamp(datetime.today().date())
-    data = data[data['date'] <= today]
-
-    # Clean up and finalise the match-level DataFrame
-    data.dropna(inplace=True)
-    data['ht_score'] = data['home_goals_ht'].astype(str) + '-' + data['away_goals_ht'].astype(str)
-    data['total_goals'] = data['home_goals_ft'] + data['away_goals_ft']
-    data['target'] = ((data['home_goals_ft'] > data['home_goals_ht']) | (data['away_goals_ft'] > data['away_goals_ht'])).astype(int)
-    return data
 
 
 
+import re
+from pathlib import Path
+from typing import Tuple
 
-def extract_identifiers(directory: str) -> tuple:
+def extract_identifiers(directory: str) -> Tuple[str, ...]:
     """
-    Extracts identifiers from filenames in the specified directory.
+    Extracts identifiers from CSV filenames in the specified directory (recursively).
 
-    The filenames should follow the pattern:
-    model_metrics_('Identifier',)_YYYYMMDD_HHMMSS.csv
+    The filenames should end with:
+        _('Identifier',)_YYYYMMDD_HHMMSS.csv
+
+    e.g.
+        value_betting_top10_('Aus1',)_20250510_091217.csv
 
     Args:
-        directory (str): The directory to search for matching files.
+        directory (str): Path to the top-level folder to search.
 
     Returns:
-        tuple: A tuple containing the extracted identifiers.
+        Tuple[str, ...]: All identifiers found inside the quotes.
     """
-    # Compile a regular expression to capture the identifier
-    pattern = re.compile(r"model_metrics_\('([^']+)',\)_\d{8}_\d{6}\.csv")
+    # Regex: anything_, then _('ID',), then _YYYYMMDD_HHMMSS.csv at the end
+    pattern = re.compile(r".*_\('([^']+)',\)_\d{8}_\d{6}\.csv$")
 
-    # Use glob to find matching files (handle cross-platform paths)
-    search_path = os.path.join(directory, "model_metrics_*.csv")
-    files = glob.glob(search_path)
+    identifiers = []
+    for csv_path in Path(directory).rglob("*.csv"):
+        match = pattern.match(csv_path.name)
+        if match:
+            identifiers.append(match.group(1))
 
-    # Extract identifiers from filenames
-    identifiers = tuple(
-        match.group(1) for file in files if (match := pattern.search(os.path.basename(file))) is not None
-    )
-
-    return identifiers
+    return tuple(identifiers)
 
 if __name__ == "__main__":
+
     start = time.time()
 
-    matches = pre_prepared_data(r'C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_ALL_2017+.csv')
+    matches = fl.pre_prepared_data(r"C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_ALL_2017+.csv")
 
-    # Process each league separately
-    leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)
-    ht_scores = matches[['ht_score']].drop_duplicates().apply(tuple, axis=1)
 
-    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal"
-    league_tuple = extract_identifiers(directory)
+    # 2. Create dummies for the 'county' column
+    country_dummies = pd.get_dummies(matches['country'], prefix='country')
 
-    for i, league in enumerate(leagues, start=1):
-        print(f"{league}: Processing league {i}/{len(leagues)}")
-        matches_filtered = matches[(matches['country'] == league[0])]
-        if matches_filtered.shape[0] >= 500:
-            fl.run_models(matches_filtered, features, league, min_samples=100, precision_test_threshold = 0.8)
-        else:
-            print("Not enough samples")
+    # 3. Concatenate the new dummy columns onto your DataFrame
+    matches = pd.concat([matches, country_dummies], axis=1)
+
+    # 4. (Optional) Drop the original 'county' column if you no longer need it
+    matches.drop('country', axis=1, inplace=True)
+
+    # 5. Add the new dummy-column names to your existing features list
+    #    assuming you already have a list called `features`:
+    features.extend(country_dummies.columns.tolist())
+
+    fl.run_models_with_probs_v3(matches, features)
 
     end = time.time()
 

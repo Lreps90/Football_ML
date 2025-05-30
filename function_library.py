@@ -1,24 +1,21 @@
-#import datetime
+# import datetime
 import random as rd
 from collections import Counter
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 from imblearn.over_sampling import SMOTE
+from scipy import stats
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
-from sklearn.ensemble import StackingClassifier
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import matthews_corrcoef, accuracy_score, f1_score, roc_auc_score, precision_score, recall_score
-from sklearn.model_selection import ParameterGrid
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import train_test_split, ParameterGrid
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
 from xgboost import XGBClassifier
-import matplotlib.pyplot as plt
-from sklearn.calibration import CalibratedClassifierCV
-from datetime import datetime
 
 
 def create_import_file(df, output_file_path, provider="", market_name="", selection_name=""):
@@ -250,8 +247,9 @@ def select_optimal_pca_components(X, variance_threshold=0.95):
 
     # Determine optimal number of components (e.g., components to explain 95% of variance).
     optimal_components = np.argmax(cumulative_variance >= variance_threshold) + 1
-    #print(f"Optimal number of components to explain 95% variance: {optimal_components}")
+    # print(f"Optimal number of components to explain 95% variance: {optimal_components}")
     return optimal_components
+
 
 def build_pipelines(apply_pca=True):
     """
@@ -421,19 +419,19 @@ def build_pipelines(apply_pca=True):
             'classifier__reg_alpha': [0, 0.1]
         }
 
-        pipelines['RandomForest'] = Pipeline([
-            ('scaler', StandardScaler()),
-            ('classifier', RandomForestClassifier(random_state=42, class_weight='balanced'))
-        ])
-        param_grids['RandomForest'] = {
-            'classifier__n_estimators': [100, 200],
-            'classifier__max_depth': [None, 10],
-            'classifier__min_samples_split': [2, 5],
-            'classifier__min_samples_leaf': [1, 2],
-            'classifier__bootstrap': [True],
-            'classifier__criterion': ['gini'],
-            'classifier__max_features': ['sqrt']
-        }
+        # pipelines['RandomForest'] = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('classifier', RandomForestClassifier(random_state=42, class_weight='balanced'))
+        # ])
+        # param_grids['RandomForest'] = {
+        #     'classifier__n_estimators': [100, 200],
+        #     'classifier__max_depth': [None, 10],
+        #     'classifier__min_samples_split': [2, 5],
+        #     'classifier__min_samples_leaf': [1, 2],
+        #     'classifier__bootstrap': [True],
+        #     'classifier__criterion': ['gini'],
+        #     'classifier__max_features': ['sqrt']
+        # }
 
         pipelines['MLP'] = Pipeline([
             ('scaler', StandardScaler()),
@@ -530,7 +528,7 @@ def build_pipelines(apply_pca=True):
     return pipelines, param_grids
 
 
-def run_models(data, features, filename_feature, min_samples=100, apply_pca=True, precision_test_threshold = 0.5):
+def run_models(data, features, filename_feature, min_samples=100, apply_pca=True, precision_test_threshold=0.5):
     """
     Run grid-search experiments over different models.
     If apply_pca is True, PCA is applied using various variance thresholds
@@ -578,9 +576,9 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
     print("Current minority/majority ratio:", current_ratio)
 
     # Define SMOTE strategies and probability thresholds
-    #lower_bound = max(np.ceil(current_ratio * 100) / 100, 0.55)
+    # lower_bound = max(np.ceil(current_ratio * 100) / 100, 0.55)
     upper_bound = 0.95  # Adjust as necessary
-    #smote_strategies = [round(x, 2) for x in np.arange(lower_bound, upper_bound, 0.05)] + [None]
+    # smote_strategies = [round(x, 2) for x in np.arange(lower_bound, upper_bound, 0.05)] + [None]
     smote_strategies = [round(x, 2) for x in np.arange(current_ratio + 0.01, upper_bound, 0.05)] + [None]
     probability_thresholds = [round(x, 2) for x in np.arange(0.2, 0.81, 0.01)]
 
@@ -841,7 +839,7 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
                                     'Recall_Test/Train_Ratio': round(recall_ratio, 4),
                                     'Train_Sample_Size': train_sample_size,
                                     'Test_Sample_Size': test_sample_size,
-                                    #'Var_Threshold': var_threshold,
+                                    # 'Var_Threshold': var_threshold,
                                     'Params': params
                                 })
 
@@ -857,8 +855,7 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
     else:
         metrics_df.to_csv(filename_out, index=False)
         print(f"Model metrics saved to {filename_out}")
-        #print(f"No metrics were recorded for {filename_feature}.")
-
+        # print(f"No metrics were recorded for {filename_feature}.")
 
 
 def run_models_with_probs(data, features, filename_feature, min_samples=100, apply_calibration=True):
@@ -1049,6 +1046,675 @@ def run_models_with_probs(data, features, filename_feature, min_samples=100, app
     metrics_df.to_csv(filename_out, index=False)
     print(f"Model metrics saved to {filename_out}")
 
+
+def running_ttest_p_profit(x):
+    """
+    One-sided (greater) t-test on sample x against popmean=0.
+    Returns p-value for H1: mean > 0.
+    """
+    x = np.asarray(x)
+    if len(x) < 2:
+        return np.nan
+    t_stat, p_two = stats.ttest_1samp(x, popmean=0, nan_policy='omit')
+    return (p_two / 2) if (t_stat > 0) else (1 - p_two / 2)
+
+models_params = [
+    (
+        'XGBoost',
+        XGBClassifier,
+        {
+            # Trees / learning‐rate trade‐off
+            'n_estimators':   [100, 300],
+            'learning_rate':  [0.05, 0.1],
+            # Shallow vs moderate depth
+            'max_depth':      [3, 5],
+            # Row & column sampling
+            'subsample':      [0.8, 1.0],
+            'colsample_bytree': [0.8],
+            # Light regularisation
+            'gamma':          [0.0, 0.1],
+            'reg_alpha':      [0.0, 0.1],
+            'reg_lambda':     [1.0],
+            # for imbalanced data you can compute:
+            # 'scale_pos_weight': [sum(neg)/sum(pos)]
+        }
+    ),
+    (
+        'MLP',
+        MLPClassifier,
+        {
+            # small vs medium single‐layer nets
+            'hidden_layer_sizes': [(50,), (100,)],
+            # L2 penalty
+            'alpha':           [1e-4, 1e-3, 1e-2],
+            # fixed learning rate
+            'learning_rate_init': [1e-3],
+            'max_iter':        [1000],
+            'early_stopping':  [True],
+            # you get a 10%‐validation split for the stopping criterion by default
+        }
+    )
+]
+
+# Main function
+
+def run_value_betting(data,
+                      features,
+                      target_col='target',
+                      odds_feature='over_25_odds',
+                      models_params=models_params,
+                      cv_splits=5,
+                      calibrate_cv=3,
+                      test_size=0.2,
+                      random_state=42,
+                      min_bets=50,
+                      filename_feature='value_bet'):
+    """
+    Uses time-series cross-validation on the training split, then evaluates on a final test set,
+    printing metrics for both train (CV) and test for each hyperparameter run.
+    P-values use a one-sided test: H0 mean <= 0 vs H1 mean > 0.
+    """
+    if models_params is None:
+        models_params = [
+            (
+                'XGBoost',
+                XGBClassifier,
+                {
+                    'n_estimators': [100, 500],
+                    'max_depth': [3, 7],
+                    'learning_rate': [0.05, 0.1],
+                    'subsample': [0.8, 1.0],
+                    'colsample_bytree': [0.8],
+                    'gamma': [0, 0.2],
+                    'min_child_weight': [1, 5],
+                    'reg_alpha': [0, 0.1],
+                    'reg_lambda': [1, 2],
+                    'scale_pos_weight': [1]
+                }
+            ),
+            (
+                'MLP',
+                MLPClassifier,
+                {
+                    'hidden_layer_sizes': [(100,), (100, 50)],
+                    'activation': ['relu'],
+                    'solver': ['adam'],
+                    'alpha': [1e-3, 1e-2, 1e-1, 1],
+                    'learning_rate': ['constant'],
+                    'learning_rate_init': [1e-3],
+                    'max_iter': [1000],
+                    'early_stopping': [True]
+                }
+            )
+        ]
+
+    # split data
+    train_df, test_df = train_test_split(data, test_size=test_size, shuffle=False)
+    tscv = TimeSeriesSplit(n_splits=cv_splits)
+
+    all_results = []
+    total_runs = sum(len(list(ParameterGrid(grid))) for _, _, grid in models_params)
+    run_counter = 0
+
+    for name, ModelClass, grid in models_params:
+        for params in ParameterGrid(grid):
+            run_counter += 1
+            print(f"=== Run {run_counter}/{total_runs}: {name}, params={params} ===")
+
+            # TRAIN CV METRICS
+            cv_profits = []
+            for train_idx, val_idx in tscv.split(train_df):
+                tr = train_df.iloc[train_idx]
+                val = train_df.iloc[val_idx]
+
+                model = ModelClass(**params)
+                if 'random_state' in model.get_params():
+                    model.set_params(random_state=random_state)
+                pipe = Pipeline([('scaler', StandardScaler()), ('model', model)])
+                pipe.fit(tr[features], tr[target_col])
+
+                calib = CalibratedClassifierCV(pipe, method='sigmoid', cv=calibrate_cv)
+                calib.fit(tr[features], tr[target_col])
+
+                probs = calib.predict_proba(val[features])[:, 1]
+                val = val.copy()
+                val['model_odds'] = 1.0 / (probs + 1e-12)
+                bets_val = val.loc[val['model_odds'] < val[odds_feature]].copy()
+                if not bets_val.empty:
+                    bets_val['profit'] = np.where(
+                        bets_val[target_col] == 1,
+                        bets_val[odds_feature] - 1,
+                        -1
+                    )
+                    cv_profits.append(bets_val['profit'])
+
+            # aggregate train CV
+            if cv_profits:
+                train_profits = pd.concat(cv_profits, ignore_index=True)
+                n_train = len(train_profits)
+                train_profit = train_profits.sum()
+                train_roi = train_profit / n_train
+                train_sr = (train_profits > 0).sum() / n_train
+                train_p = running_ttest_p_profit(train_profits)
+            else:
+                n_train = train_profit = train_roi = train_sr = train_p = None
+
+            # TEST METRICS
+            model_f = ModelClass(**params)
+            if 'random_state' in model_f.get_params():
+                model_f.set_params(random_state=random_state)
+            pipe_f = Pipeline([('scaler', StandardScaler()), ('model', model_f)])
+            pipe_f.fit(train_df[features], train_df[target_col])
+
+            calib_f = CalibratedClassifierCV(pipe_f, method='sigmoid', cv=calibrate_cv)
+            calib_f.fit(train_df[features], train_df[target_col])
+
+            probs_t = calib_f.predict_proba(test_df[features])[:, 1]
+            test = test_df.copy()
+            test['model_odds'] = 1.0 / (probs_t + 1e-12)
+            bets_test = test.loc[test['model_odds'] < test[odds_feature]].copy()
+            if not bets_test.empty:
+                bets_test['profit'] = np.where(
+                    bets_test[target_col] == 1,
+                    bets_test[odds_feature] - 1,
+                    -1
+                )
+                n_test = len(bets_test)
+                test_profit = bets_test['profit'].sum()
+                test_roi = test_profit / n_test
+                test_sr = bets_test[target_col].sum() / n_test
+                test_p = running_ttest_p_profit(bets_test['profit'])
+            else:
+                n_test = test_profit = test_roi = test_sr = test_p = None
+
+            # print metrics
+            print(f"Train CV: bets={n_train}, profit={train_profit}, roi={train_roi:.3f}, "
+                  f"sr={train_sr:.3f}, pval={train_p}")
+            print(f"Test Set: bets={n_test}, profit={test_profit}, roi={test_roi:.3f}, "
+                  f"sr={test_sr:.3f}, pval={test_p}")
+
+            # collect if valid
+            if all(v is not None for v in [n_train, n_test, train_profit, test_profit]) \
+               and n_train >= min_bets and n_test >= min_bets and test_profit > 0:
+                all_results.append({
+                    'model_name': name,
+                    'num_bets_train': n_train,
+                    'total_profit_train': round(train_profit, 4),
+                    'roi_train': round(train_roi, 4),
+                    'strike_rate_train': round(train_sr, 4),
+                    'pvalue_train': round(train_p, 4) if train_p is not None else None,
+                    'num_bets_test': n_test,
+                    'total_profit_test': round(test_profit, 4),
+                    'roi_test': round(test_roi, 4),
+                    'strike_rate_test': round(test_sr, 4),
+                    'pvalue_test': round(test_p, 4) if test_p is not None else None
+                })
+
+    df = pd.DataFrame(all_results)
+    if df.empty:
+        print("No profitable runs found.")
+        return df
+
+    df.sort_values('total_profit_test', ascending=False, inplace=True)
+    top100 = df.head(100)
+
+    csv = f"value_betting_top100_{filename_feature}_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
+    top100.to_csv(csv, index=False)
+    print(f"Saved top-100 to {csv}")
+    return top100
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split, ParameterGrid
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import roc_auc_score, precision_score
+
+# Assumes running_ttest_p_profit is defined elsewhere
+def run_models_with_probs_v2(
+    data,
+    features,
+    models_params=models_params,
+    thresholds=np.arange(0.1, 0.9, 0.1),
+    test_size=0.2,
+    random_state=42,
+    apply_calibration=True,
+    min_samples=25,
+    filename_feature='model_probs'
+):
+    """
+    1. Splits `data` into train/test by `test_size` (default 80/20).
+    2. For each model/parameter combination:
+       - Trains model (with optional calibration) on train set.
+       - Predicts probabilities on both train and test sets.
+       - For each threshold, computes:
+         * Number of bets
+         * AUC, Precision
+         * Profit/Loss using `over_25_odds`
+         * ROI, P-value
+         * Precision ratio (test/train)
+       - If BOTH train and test P/L > 0, runs model on full data and computes overall Bets, P/L, ROI, P-value.
+         * Prints overall metrics with threshold included.
+    3. Aggregates runs into DataFrame, ensures full-data columns exist.
+    4. Saves CSV only if at least one run has both `pl_train>0` and `pl_test>0`.
+    """
+    # Split data
+    train_data, test_data = train_test_split(
+        data, test_size=test_size, random_state=random_state
+    )
+    X_tr, y_tr = train_data[features], train_data['target']
+    X_te, y_te = test_data[features], test_data['target']
+
+    odds_tr = train_data['over_25_odds'].values
+    odds_te = test_data['over_25_odds'].values
+    odds_full = data['over_25_odds'].values
+
+    all_metrics = []
+    total_runs = sum(len(list(ParameterGrid(grid))) for _, _, grid in models_params)
+    run_count = 0
+
+    for name, ModelClass, grid in models_params:
+        for params in ParameterGrid(grid):
+            run_count += 1
+            print(f"\n=== Run {run_count}/{total_runs}: {name} | params={params} ===")
+
+            # Train and optionally calibrate
+            model = ModelClass(**params)
+            if 'random_state' in model.get_params():
+                model.set_params(random_state=random_state)
+            pipe = Pipeline([('scaler', StandardScaler()), ('model', model)])
+            pipe.fit(X_tr, y_tr)
+            if apply_calibration:
+                clf = CalibratedClassifierCV(pipe, method='sigmoid', cv='prefit')
+                clf.fit(X_tr, y_tr)
+            else:
+                clf = pipe
+
+            # Predict probabilities
+            prob_tr = clf.predict_proba(X_tr)[:, 1]
+            prob_te = clf.predict_proba(X_te)[:, 1]
+
+            # Compute AUCs
+            auc_tr = roc_auc_score(y_tr, prob_tr)
+            auc_te = roc_auc_score(y_te, prob_te)
+
+            # Loop thresholds
+            for t in thresholds:
+                mask_tr = prob_tr >= t
+                mask_te = prob_te >= t
+                n_tr = int(mask_tr.sum())
+                n_te = int(mask_te.sum())
+
+                if n_tr < min_samples or n_te < min_samples:
+                    continue
+
+                prec_tr = precision_score(y_tr, mask_tr)
+                prec_te = precision_score(y_te, mask_te)
+
+                profits_tr = np.where(
+                    mask_tr & (y_tr.values == 1), odds_tr - 1,
+                    np.where(mask_tr, -1, 0)
+                )
+                profits_te = np.where(
+                    mask_te & (y_te.values == 1), odds_te - 1,
+                    np.where(mask_te, -1, 0)
+                )
+
+                total_pl_tr = profits_tr.sum()
+                total_pl_te = profits_te.sum()
+
+                roi_tr = total_pl_tr / n_tr
+                roi_te = total_pl_te / n_te
+
+                pval_tr = running_ttest_p_profit(profits_tr[mask_tr].tolist())
+                pval_te = running_ttest_p_profit(profits_te[mask_te].tolist())
+
+                ratio = prec_te / (prec_tr + 1e-10)
+
+                # Print train/test metrics
+                print(
+                    f"Threshold {t:.2f} | "
+                    f"Train: bets={n_tr}, auc={auc_tr:.3f}, prec={prec_tr:.3f}, pl={total_pl_tr:.2f}, roi={roi_tr:.3f}, pval={pval_tr:.3f} | "
+                    f"Test:  bets={n_te}, auc={auc_te:.3f}, prec={prec_te:.3f}, pl={total_pl_te:.2f}, roi={roi_te:.3f}, pval={pval_te:.3f} | "
+                    f"Ratio: {ratio:.3f}"
+                )
+
+                # Prepare record with default full-data fields
+                rec = {
+                    'model': name,
+                    'params': params,
+                    'threshold': t,
+                    'bets_train': n_tr,
+                    'auc_train': round(auc_tr, 4),
+                    'prec_train': round(prec_tr, 4),
+                    'pl_train': round(total_pl_tr, 2),
+                    'roi_train': round(roi_tr, 4),
+                    'pval_train': round(pval_tr, 4),
+                    'bets_test': n_te,
+                    'auc_test': round(auc_te, 4),
+                    'prec_test': round(prec_te, 4),
+                    'pl_test': round(total_pl_te, 2),
+                    'roi_test': round(roi_te, 4),
+                    'pval_test': round(pval_te, 4),
+                    'prec_ratio': round(ratio, 4),
+                    'bets_full': np.nan,
+                    'pl_full': np.nan,
+                    'roi_full': np.nan,
+                    'pval_full': np.nan
+                }
+
+                # If both profits positive, compute full-data metrics
+                if total_pl_tr > 0 and total_pl_te > 0:
+                    prob_full = clf.predict_proba(data[features])[:, 1]
+                    mask_full = prob_full >= t
+                    n_full = int(mask_full.sum())
+                    if n_full >= min_samples:
+                        profits_full = np.where(
+                            mask_full & (data['target'].values == 1), odds_full - 1,
+                            np.where(mask_full, -1, 0)
+                        )
+                        overall_pl = profits_full.sum()
+                        overall_roi = overall_pl / n_full
+                        overall_pval = running_ttest_p_profit(profits_full[mask_full].tolist())
+
+                        # Print full-data metrics
+                        print(
+                            f"Full data @ threshold {t:.2f}: bets={n_full}, pl={overall_pl:.2f}, roi={overall_roi:.3f}, pval={overall_pval:.3f}"
+                        )
+
+                        # Update record
+                        rec.update({
+                            'bets_full': n_full,
+                            'pl_full': round(overall_pl, 2),
+                            'roi_full': round(overall_roi, 4),
+                            'pval_full': round(overall_pval, 4)
+                        })
+                    else:
+                        print(
+                            f"Full data @ threshold {t:.2f}: fewer than {min_samples} bets, skipping overall metrics"
+                        )
+
+                all_metrics.append(rec)
+
+    # Finalize DataFrame
+    df = pd.DataFrame(all_metrics)
+    # Only save if at least one run has pl_train>0 and pl_test>0
+    positive_mask = (df['pl_train'] > 0) & (df['pl_test'] > 0)
+    df_to_save = df[positive_mask]
+    if not df_to_save.empty:
+        df_to_save.sort_values('prec_ratio', ascending=False, inplace=True)
+        csv = f"model_probs_{filename_feature}_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
+        df_to_save.to_csv(csv, index=False)
+        print(f"Results saved to {csv}")
+    else:
+        print("No runs with positive P/L on both train and test; CSV not saved.")
+    return df
+
+def run_models_with_probs_v3(
+        data,
+        features,
+        models_params=None,
+        thresholds=np.arange(0.1, 0.9, 0.1),
+        test_size=0.2,
+        random_state=42,
+        apply_calibration=True,
+        min_samples=25,
+        filename_feature='model_probs'
+):
+        """
+        1. Splits `data` into train/test by `test_size` (default 80/20).
+        2. For each model/parameter combination:
+           - Trains model (with optional calibration) on train set (uses eval_set if early_stopping_rounds passed for XGBoost).
+           - Predicts probabilities on both train and test sets.
+           - For each threshold, computes:
+             * Number of bets
+             * AUC, Precision
+             * Profit/Loss using `over_25_odds`
+             * ROI, P-value
+             * Precision ratio (test/train)
+           - If BOTH train and test P/L > 0, runs model on full data and computes overall Bets, P/L, ROI, P-value.
+             * Prints overall metrics with threshold included.
+        3. Aggregates runs into DataFrame, ensures full-data columns exist.
+        4. Saves CSV only if at least one run has both `pl_train>0` and `pl_test>0`.
+        """
+        models_params = [
+            (
+                'XGBoost',
+                XGBClassifier,
+                {
+                    'n_estimators': [100, 300, 500],
+                    'learning_rate': [0.05, 0.1],
+                    'max_depth': [3, 5, 7],
+                    'subsample': [0.8, 1.0],
+                    'colsample_bytree': [0.8, 1.0],
+                    'gamma': [0.0, 0.1],
+                    'reg_alpha': [0.0, 0.1],
+                    'reg_lambda': [1.0, 2.0],
+                    'scale_pos_weight': [1, (data['target'] == 0).sum() / (data['target'] == 1).sum()],
+                    #'early_stopping_rounds': [50]
+                }
+            ),
+            (
+                'MLP',
+                MLPClassifier,
+                {
+                    'hidden_layer_sizes': [(100,), (100, 50), (100, 50, 25)],
+                    'alpha': [1e-4, 1e-3, 1e-2],
+                    'learning_rate_init': [1e-3],
+                    'max_iter': [1000],
+                    'early_stopping': [True],
+                    'validation_fraction': [0.1],
+                    'n_iter_no_change': [20]
+                }
+            )
+        ]
+        # Split data
+        train_data, test_data = train_test_split(
+            data, test_size=test_size, random_state=random_state
+        )
+        X_tr, y_tr = train_data[features], train_data['target']
+        X_te, y_te = test_data[features], test_data['target']
+
+        odds_tr = train_data['over_25_odds'].values
+        odds_te = test_data['over_25_odds'].values
+        odds_full = data['over_25_odds'].values
+
+        all_metrics = []
+        total_runs = sum(len(list(ParameterGrid(grid))) for _, _, grid in models_params)
+        run_count = 0
+
+        for name, ModelClass, grid in models_params:
+            for params in ParameterGrid(grid):
+                run_count += 1
+                print(f"\n=== Run {run_count}/{total_runs}: {name} | params={params} ===")
+
+                # Copy and extract early stopping for XGB
+                params_copy = params.copy()
+                es_rounds = params_copy.pop('early_stopping_rounds', None)
+
+                # Instantiate model
+                model = ModelClass(**params_copy)
+                if hasattr(model, 'random_state'):
+                    model.set_params(random_state=random_state)
+
+                pipe = Pipeline([('scaler', StandardScaler()), ('model', model)])
+
+                # Fit with early stopping if XGB
+                if isinstance(model, XGBClassifier) and es_rounds is not None:
+                    pipe.fit(
+                        X_tr, y_tr,
+                        model__eval_set=[(X_te, y_te)],
+                        model__early_stopping_rounds=es_rounds,
+                        model__verbose=False
+                    )
+                else:
+                    pipe.fit(X_tr, y_tr)
+
+                # Calibration
+                if apply_calibration:
+                    clf = CalibratedClassifierCV(pipe, method='sigmoid', cv='prefit')
+                    clf.fit(X_tr, y_tr)
+                else:
+                    clf = pipe
+
+                # Predict probabilities
+                prob_tr = clf.predict_proba(X_tr)[:, 1]
+                prob_te = clf.predict_proba(X_te)[:, 1]
+
+                # Compute AUCs
+                auc_tr = roc_auc_score(y_tr, prob_tr)
+                auc_te = roc_auc_score(y_te, prob_te)
+
+                # Loop thresholds
+                for t in thresholds:
+                    mask_tr = prob_tr >= t
+                    mask_te = prob_te >= t
+                    n_tr = int(mask_tr.sum())
+                    n_te = int(mask_te.sum())
+
+                    if n_tr < min_samples or n_te < min_samples:
+                        continue
+
+                    prec_tr = precision_score(y_tr, mask_tr)
+                    prec_te = precision_score(y_te, mask_te)
+
+                    profits_tr = np.where(
+                        mask_tr & (y_tr.values == 1), odds_tr - 1,
+                        np.where(mask_tr, -1, 0)
+                    )
+                    profits_te = np.where(
+                        mask_te & (y_te.values == 1), odds_te - 1,
+                        np.where(mask_te, -1, 0)
+                    )
+
+                    total_pl_tr = profits_tr.sum()
+                    total_pl_te = profits_te.sum()
+
+                    roi_tr = total_pl_tr / n_tr
+                    roi_te = total_pl_te / n_te
+
+                    pval_tr = running_ttest_p_profit(profits_tr[mask_tr].tolist())
+                    pval_te = running_ttest_p_profit(profits_te[mask_te].tolist())
+
+                    ratio = prec_te / (prec_tr + 1e-10)
+
+                    # Print train/test metrics
+                    print(
+                        f"Threshold {t:.2f} | "
+                        f"Train: bets={n_tr}, auc={auc_tr:.3f}, prec={prec_tr:.3f}, pl={total_pl_tr:.2f}, roi={roi_tr:.3f}, pval={pval_tr:.3f} | "
+                        f"Test:  bets={n_te}, auc={auc_te:.3f}, prec={prec_te:.3f}, pl={total_pl_te:.2f}, roi={roi_te:.3f}, pval={pval_te:.3f} | "
+                        f"Ratio: {ratio:.3f}"
+                    )
+
+                    # Prepare record
+                    rec = {
+                        'model': name,
+                        'params': params_copy,
+                        'threshold': t,
+                        'bets_train': n_tr,
+                        'auc_train': round(auc_tr, 4),
+                        'prec_train': round(prec_tr, 4),
+                        'pl_train': round(total_pl_tr, 2),
+                        'roi_train': round(roi_tr, 4),
+                        'pval_train': round(pval_tr, 4),
+                        'bets_test': n_te,
+                        'auc_test': round(auc_te, 4),
+                        'prec_test': round(prec_te, 4),
+                        'pl_test': round(total_pl_te, 2),
+                        'roi_test': round(roi_te, 4),
+                        'pval_test': round(pval_te, 4),
+                        'prec_ratio': round(ratio, 4),
+                        'bets_full': np.nan,
+                        'pl_full': np.nan,
+                        'roi_full': np.nan,
+                        'pval_full': np.nan
+                    }
+
+                    # Full-data metrics
+                    if total_pl_tr > 0 and total_pl_te > 0:
+                        prob_full = clf.predict_proba(data[features])[:, 1]
+                        mask_full = prob_full >= t
+                        n_full = int(mask_full.sum())
+                        if n_full >= min_samples:
+                            profits_full = np.where(
+                                mask_full & (data['target'].values == 1), odds_full - 1,
+                                np.where(mask_full, -1, 0)
+                            )
+                            overall_pl = profits_full.sum()
+                            overall_roi = overall_pl / n_full
+                            overall_pval = running_ttest_p_profit(profits_full[mask_full].tolist())
+
+                            print(
+                                f"Full data @ threshold {t:.2f}: bets={n_full}, pl={overall_pl:.2f}, roi={overall_roi:.3f}, pval={overall_pval:.3f}"
+                            )
+
+                            rec.update({
+                                'bets_full': n_full,
+                                'pl_full': round(overall_pl, 2),
+                                'roi_full': round(overall_roi, 4),
+                                'pval_full': round(overall_pval, 4)
+                            })
+                        else:
+                            print(
+                                f"Full data @ threshold {t:.2f}: fewer than {min_samples} bets, skipping overall metrics"
+                            )
+
+                    all_metrics.append(rec)
+
+        # Finalize DataFrame
+        df = pd.DataFrame(all_metrics)
+        # Save only if positive P/L trains/tests
+        mask_pos = (df['pl_train'] > 0) & (df['pl_test'] > 0)
+        df_to_save = df[mask_pos]
+        if not df_to_save.empty:
+            df_to_save.sort_values('prec_ratio', ascending=False, inplace=True)
+            csv = f"model_probs_{filename_feature}_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
+            df_to_save.to_csv(csv, index=False)
+            print(f"Results saved to {csv}")
+        else:
+            print("No runs with positive P/L on both train and test; CSV not saved.")
+
+        return df
+
+
+
+
+
+
+
+def simple_feature_importance(df, features, target_col='target'):
+    """
+    Fit a RandomForestClassifier and print its built-in feature importances.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Data containing both features and the target column.
+    features : list of str
+        Names of feature columns.
+    target_col : str
+        Name of the target column in df.
+
+    Returns
+    -------
+    importances : pd.Series
+        Sorted feature importances.
+    """
+    X = df[features]
+    y = df[target_col]
+    model = RandomForestClassifier(random_state=42)
+    model.fit(X, y)
+
+    importances = pd.Series(
+        model.feature_importances_,
+        index=features
+    ).sort_values(ascending=False)
+
+    print("Feature importances:")
+    print(importances.to_string())
+
+    return importances
 
 
 def pre_prepared_data(file_path):
