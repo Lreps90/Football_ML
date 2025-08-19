@@ -788,9 +788,9 @@ def pre_prepared_data(file_path):
 
     # Clean up and finalise the match-level DataFrame
     data.dropna(inplace=True)
-    data['ht_score'] = data['home_goals_ht'].astype(str) + '-' + data['away_goals_ht'].astype(str)
+    #data['ht_score'] = data['home_goals_ht'].astype(str) + '-' + data['away_goals_ht'].astype(str)
     data['total_goals'] = data['home_goals_ft'] + data['away_goals_ft']
-    data['target'] = ((data['home_goals_ft'] > data['home_goals_ht']) | (data['away_goals_ft'] > data['away_goals_ht'])).astype(int)
+    data['target'] = (data['total_goals']) > 2.5
     return data
 
 
@@ -826,31 +826,20 @@ if __name__ == "__main__":
 
     # Process each league separately
     leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)
-    ht_scores = matches[['ht_score']].drop_duplicates().apply(tuple, axis=1)
+    # ht_scores = matches[['ht_score']].drop_duplicates().apply(tuple, axis=1)
 
     matches = pd.get_dummies(matches, columns=['country'], prefix='country')
     dummy_cols = [col for col in matches.columns if col.startswith('country_')]
     features = features + dummy_cols
 
-    directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
-    scoreline_tuple = extract_scores(directory)
+    # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
+    # scoreline_tuple = extract_scores(directory)
 
-    #for league in leagues:
-    for ht_score in ht_scores:
-        print(ht_score)
-        test = ht_score[0]
-        matches_filtered = matches[(matches['ht_score'] == ht_score[0])]
-        if matches_filtered.shape[0] >= 1000:
-            if ht_score[0] not in scoreline_tuple:
-                fl.run_models_v2(matches_filtered, features, ht_score, min_samples=100, min_test_samples=100,
-                                 precision_test_threshold = 0.8,
-                                 n_random_param_sets = 100,
-                                 cpu_jobs=-1,
-                                 )
-            else:
-                print("Scoreline already modelled...")
-        else:
-            print("Not enough samples...")
+    fl.run_models_o25(matches, features, min_samples=1000, min_test_samples=1000,
+                     precision_test_threshold = 0.6,
+                     n_random_param_sets = 200,
+                     cpu_jobs=4,
+                     )
 
     end = time.time()
 

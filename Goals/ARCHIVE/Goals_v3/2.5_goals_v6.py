@@ -814,7 +814,7 @@ if __name__ == "__main__":
     start = time.time()
 
     #matches = prepare_data(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\cgmbetdatabase_top_5_2020+.csv")
-    matches = fl.pre_prepared_data(r"C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_ALL_2017+.csv")
+    matches = fl.pre_prepared_data(r"/engineered_master_data_ALL_2017+.csv")
 
     # Process each league separately
     leagues = matches[['country']].drop_duplicates().apply(tuple, axis=1)

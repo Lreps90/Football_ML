@@ -858,6 +858,1302 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
         # print(f"No metrics were recorded for {filename_feature}.")
 
 
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+os.environ.setdefault("XGBOOST_VERBOSITY", "0")
+
+from datetime import datetime
+from itertools import product
+import numpy as np
+import pandas as pd
+from joblib import Parallel, delayed, parallel_backend
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import (
+    roc_auc_score, log_loss, brier_score_loss,
+    precision_score, accuracy_score
+)
+from sklearn.model_selection import ParameterSampler
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline, Pipeline
+from sklearn.preprocessing import StandardScaler
+import joblib
+from tqdm import tqdm
+from tqdm_joblib import tqdm_joblib
+
+try:
+    import xgboost as xgb
+    _HAS_XGB = True
+except Exception:
+    _HAS_XGB = False
+
+def run_models_v2(
+    matches_filtered: pd.DataFrame,
+    features: list,
+    ht_score: tuple | str,
+    min_samples: int = 200,            # validation gate: min predicted positives across folds
+    min_test_samples: int = 100,       # test gate: min predicted positives on hold-out test
+    precision_test_threshold: float = 0.80,
+    base_model: str = "xgb",           # "xgb" or "mlp"
+    search_mode: str = "random",       # "random" or "grid"
+    n_random_param_sets: int = 10,
+    cpu_jobs: int = 6,
+    top_k: int = 10,
+    thresholds: np.ndarray | None = None,
+    out_dir: str | None = None,
+    # --- anti-overfitting knobs ---
+    val_conf_level: float = 0.95,      # Wilson-LCB confidence for validation precision
+    max_precision_drop: float = 0.10,  # allow at most 10pp drop val → test
+    # --- failure handling ---
+    on_fail: str = "return",           # "return" | "warn" | "raise"
+    save_diagnostics_on_fail: bool = True,
+):
+    """
+    Rolling time-ordered CV (no leakage) with calibration and robust failure handling.
+
+    Random every run:
+      - Hyper-parameter samples change each call (fresh entropy).
+      - Model random_state changes each call (stable within-run per param set).
+
+    Selection:
+      1) Evaluate candidates on rolling validation across thresholds; track TP/FP.
+      2) Rank by Wilson LCB of validation precision, then mean val precision, n_preds_val, val_accuracy.
+      3) Take Top-K by that ranking. Fit on pre-test, calibrate on small final-val window,
+         evaluate on TEST at each chosen threshold.
+      4) TEST GATE: keep ONLY rows with
+            n_preds_test ≥ min_test_samples
+         AND test_precision ≥ max(precision_test_threshold, val_precision - max_precision_drop).
+      5) Save CSV with ONLY survivors (includes 'model_pkl' for the top row), and save PKL for the top survivor.
+
+    Failure case (no survivors):
+      - If save_diagnostics_on_fail=True, writes a *_FAILED.csv with all Top-K test results and 'fail_reason'.
+      - Behaviour controlled by `on_fail`: "return" (default), "warn", or "raise".
+    """
+    # ------------------ Imports & setup ------------------
+    import os, secrets, hashlib
+    from datetime import datetime
+    import numpy as np
+    import pandas as pd
+    from itertools import product
+    from math import sqrt
+    from sklearn.model_selection import ParameterSampler
+    from sklearn.metrics import precision_score, accuracy_score, roc_auc_score, log_loss, brier_score_loss
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.pipeline import Pipeline, make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.neural_network import MLPClassifier
+    from joblib import Parallel, delayed, parallel_backend
+    from tqdm import tqdm
+    from tqdm_joblib import tqdm_joblib
+    import joblib
+
+    # xgboost (optional)
+    try:
+        import xgboost as xgb
+        _HAS_XGB_LOCAL = True
+    except Exception:
+        _HAS_XGB_LOCAL = False
+
+    # fallbacks for distributions if not defined at module scope
+    try:
+        _randint  # noqa: F821
+        _uniform  # noqa: F821
+        _loguniform  # noqa: F821
+    except NameError:
+        from scipy.stats import randint as _randint
+        from scipy.stats import uniform as _uniform
+        from scipy.stats import loguniform as _loguniform
+
+    # normal quantile for Wilson LCB
+    try:
+        from scipy.stats import norm
+        _Z = lambda conf: float(norm.ppf(1 - (1 - conf) / 2))
+    except Exception:
+        _Z = lambda conf: 1.96 if abs(conf - 0.95) < 1e-6 else 1.64  # crude fallback
+
+    def _wilson_lcb(tp: int, fp: int, conf: float) -> float:
+        n = tp + fp
+        if n <= 0:
+            return 0.0
+        p = tp / n
+        z = _Z(conf)
+        denom = 1.0 + (z*z)/n
+        centre = p + (z*z)/(2*n)
+        rad = z * sqrt((p*(1-p)/n) + (z*z)/(4*n*n))
+        return max(0.0, (centre - rad) / denom)
+
+    if thresholds is None:
+        thresholds = np.round(np.arange(0.10, 0.91, 0.01), 2)
+
+    ht_tag = ht_score[0] if isinstance(ht_score, tuple) else str(ht_score)
+    out_dir = out_dir or os.getcwd()
+    os.makedirs(out_dir, exist_ok=True)
+
+    # honour external _HAS_XGB if present, else use local probe
+    _HAS_XGB = globals().get("_HAS_XGB", _HAS_XGB_LOCAL)
+    if base_model == "xgb" and not _HAS_XGB:
+        raise ImportError("XGBoost not available; set base_model='mlp' or install xgboost.")
+
+    # Fresh run seed → different every invocation
+    RUN_SEED = secrets.randbits(32)
+
+    def _seed_from(*vals) -> int:
+        """Derive a stable (within-run) 31-bit positive seed from RUN_SEED and provided values."""
+        h = hashlib.blake2b(digest_size=8)
+        h.update(int(RUN_SEED).to_bytes(8, 'little', signed=False))
+        for v in vals:
+            h.update(str(v).encode('utf-8'))
+        return int.from_bytes(h.digest(), 'little') & 0x7FFFFFFF
+
+    # ------------------ Data prep ------------------
+    req_cols = {'date', 'target'}
+    missing = req_cols - set(matches_filtered.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    df = matches_filtered.copy()
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.sort_values('date').reset_index(drop=True)
+
+    cols_needed = list(set(features) | {'target'})
+    df = df.dropna(subset=cols_needed).reset_index(drop=True)
+
+    X = df[features].copy()
+    y = df['target'].astype(int).reset_index(drop=True)
+
+    n = len(X)
+    if n < max(min_samples * 3, 500):
+        raise RuntimeError(f"Not enough rows for HT score {ht_tag}: {n}")
+
+    # ------------------ Temporal split ------------------
+    test_start = int(0.85 * n)
+    pretest_end = test_start
+
+    X_test = X.iloc[test_start:].reset_index(drop=True)
+    y_test = y.iloc[test_start:].reset_index(drop=True)
+
+    # Rolling folds inside [0, pretest_end)
+    N_FOLDS = 5
+    total_val_len = max(1, int(0.15 * n))
+    val_len = max(1, total_val_len // N_FOLDS)
+    fold_val_ends = [pretest_end - total_val_len + (i + 1) * val_len for i in range(N_FOLDS)]
+    fold_val_starts = [end - val_len for end in fold_val_ends]
+    if fold_val_ends:
+        fold_val_ends[-1] = min(fold_val_ends[-1], pretest_end)
+        fold_val_starts[-1] = max(0, fold_val_ends[-1] - val_len)
+
+    # Final small validation slice (for calibration before test)
+    final_val_len = max(1, val_len)
+    final_val_start = max(0, test_start - final_val_len)
+    X_train_final = X.iloc[:final_val_start]
+    y_train_final = y.iloc[:final_val_start]
+    X_val_final   = X.iloc[final_val_start:test_start]
+    y_val_final   = y.iloc[final_val_start:test_start]
+
+    # ------------------ Hyper-parameter spaces ------------------
+    xgb_param_grid = {
+        'n_estimators':      [200],
+        'max_depth':         [5],
+        'learning_rate':     [0.1],
+        'subsample':         [0.7],
+        'colsample_bytree':  [1.0],
+        'min_child_weight':  [5],
+        'reg_lambda':        [1.0],
+    }
+    xgb_param_distributions = {
+        'n_estimators':      _randint(100, 1001),
+        'max_depth':         _randint(3, 8),
+        'learning_rate':     _loguniform(0.01, 0.2),
+        'min_child_weight':  _randint(3, 13),
+        'subsample':         _uniform(0.7, 0.3),
+        'colsample_bytree':  _uniform(0.6, 0.4),
+        'reg_lambda':        _loguniform(0.1, 10.0),
+    }
+    mlp_param_grid = {
+        'hidden_layer_sizes': [(128,), (256,), (128, 64)],
+        'alpha':              [1e-4],
+        'learning_rate_init': [1e-3],
+        'batch_size':         ['auto'],
+        'max_iter':           [200],
+    }
+    mlp_param_distributions = {
+        'hidden_layer_sizes': [(64,), (128,), (256,), (128, 64), (256, 128)],
+        'alpha':              _loguniform(1e-5, 1e-2),
+        'learning_rate_init': _loguniform(5e-4, 5e-2),
+        'batch_size':         _randint(32, 257),
+        'max_iter':           _randint(150, 401),
+    }
+
+    if search_mode.lower() == "grid":
+        grid, dists = (xgb_param_grid, None) if base_model == "xgb" else (mlp_param_grid, None)
+        all_param_dicts = [dict(zip(grid.keys(), combo)) for combo in product(*grid.values())]
+    else:
+        grid, dists = (xgb_param_grid, xgb_param_distributions) if base_model == "xgb" else (mlp_param_grid, mlp_param_distributions)
+        # Random every run
+        sampler_seed = _seed_from("sampler")
+        all_param_dicts = list(ParameterSampler(dists, n_iter=n_random_param_sets, random_state=sampler_seed))
+
+    # ------------------ Helpers ------------------
+    def cast_params(p: dict) -> dict:
+        q = dict(p)
+        if base_model == "xgb":
+            for k in ['n_estimators', 'max_depth', 'min_child_weight']:
+                if k in q: q[k] = int(q[k])
+            for k in ['learning_rate', 'subsample', 'colsample_bytree', 'reg_lambda']:
+                if k in q: q[k] = float(q[k])
+        else:
+            if 'max_iter' in q: q['max_iter'] = int(q['max_iter'])
+            if 'batch_size' in q and q['batch_size'] != 'auto':
+                q['batch_size'] = int(q['batch_size'])
+            if 'alpha' in q: q['alpha'] = float(q['alpha'])
+            if 'learning_rate_init' in q: q['learning_rate_init'] = float(q['learning_rate_init'])
+            if 'hidden_layer_sizes' in q:
+                h = q['hidden_layer_sizes']
+                q['hidden_layer_sizes'] = tuple(h) if not isinstance(h, tuple) else h
+        return q
+
+    def _final_step_name(estimator):
+        try:
+            if isinstance(estimator, Pipeline):
+                return estimator.steps[-1][0]
+        except Exception:
+            pass
+        return None
+
+    def build_model(params: dict, spw: float):
+        # model seed depends on RUN_SEED and params → changes each run
+        model_seed = _seed_from("model", base_model, tuple(sorted(params.items())))
+        if base_model == "xgb":
+            return xgb.XGBClassifier(
+                objective='binary:logistic',
+                eval_metric='auc',
+                random_state=model_seed,
+                scale_pos_weight=spw,
+                n_jobs=1,
+                tree_method="hist",
+                verbosity=0,
+                **params
+            )
+        else:
+            mlp = MLPClassifier(
+                random_state=model_seed,
+                early_stopping=True,
+                n_iter_no_change=20,
+                validation_fraction=0.1,
+                solver="adam",
+                **params
+            )
+            return make_pipeline(StandardScaler(with_mean=True, with_std=True), mlp)
+
+    def fit_model(model, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None):
+        if base_model == "xgb":
+            try:
+                model.set_params(verbosity=0, early_stopping_rounds=50)
+                if X_va is not None and y_va is not None:
+                    model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
+                else:
+                    model.fit(X_tr, y_tr, verbose=False)
+            except Exception:
+                model.fit(X_tr, y_tr, verbose=False)
+        else:
+            fit_kwargs = {}
+            if sample_weight is not None:
+                stepname = _final_step_name(model)
+                if stepname is not None:
+                    fit_kwargs[f"{stepname}__sample_weight"] = sample_weight
+            try:
+                model.fit(X_tr, y_tr, **fit_kwargs)
+            except TypeError:
+                model.fit(X_tr, y_tr)
+
+    def fit_calibrator(fitted, X_va, y_va):
+        try:
+            from sklearn.calibration import FrozenEstimator
+            frozen = FrozenEstimator(fitted)
+            cal = CalibratedClassifierCV(frozen, method='sigmoid', cv=None)
+            cal.fit(X_va, y_va)
+            return cal
+        except Exception:
+            try:
+                cal = CalibratedClassifierCV(fitted, method='sigmoid', cv='prefit')
+                cal.fit(X_va, y_va)
+                return cal
+            except Exception:
+                return fitted
+
+    def predict_proba_1(model_or_cal, X_):
+        proba = model_or_cal.predict_proba(X_)
+        return proba[:, 1].astype(np.float32) if proba.ndim == 2 else np.asarray(proba, dtype=np.float32)
+
+    # ------------------ Rolling-CV evaluator (VALIDATION) ------------------
+    def evaluate_param_set(param_dict, task_id=None, total_tasks=None):
+        safe = cast_params(param_dict)
+        rows = []
+        val_prob_all, val_true_all = [], []
+
+        for vstart, vend in zip(fold_val_starts, fold_val_ends):
+            if vstart is None or vend is None or vstart <= 0 or vend <= vstart:
+                continue
+
+            X_tr, y_tr = X.iloc[:vstart], y.iloc[:vstart]
+            X_va, y_va = X.iloc[vstart:vend], y.iloc[vstart:vend]
+
+            pos = int(y_tr.sum()); neg = len(y_tr) - pos
+            spw = (neg / pos) if pos > 0 else 1.0
+
+            sample_weight = None
+            if base_model == "mlp":
+                w_pos = spw
+                sample_weight = np.where(y_tr.values == 1, w_pos, 1.0).astype(np.float32)
+
+            model = build_model(safe, spw)
+            fit_model(model, X_tr, y_tr, X_va, y_va, sample_weight=sample_weight)
+
+            cal = fit_calibrator(model, X_va, y_va)
+            proba_va = predict_proba_1(cal, X_va)
+
+            val_prob_all.append(proba_va)
+            y_true = y_va.values.astype(np.uint8)
+            val_true_all.append(y_true)
+
+            for thr in thresholds:
+                y_pred = (proba_va >= thr).astype(np.uint8)
+                n_preds = int(y_pred.sum())
+                tp = int(((y_true == 1) & (y_pred == 1)).sum())
+                fp = int(((y_true == 0) & (y_pred == 1)).sum())
+                prc = precision_score(y_va, y_pred, zero_division=0)
+                acc = accuracy_score(y_va, y_pred)
+
+                rows.append({
+                    **safe,
+                    'threshold': float(thr),
+                    'fold_vstart': int(vstart),
+                    'fold_vend': int(vend),
+                    'n_preds_val': n_preds,
+                    'tp_val': tp,
+                    'fp_val': fp,
+                    'val_precision': float(prc),
+                    'val_accuracy': float(acc),
+                })
+
+        # pooled diagnostics (optional)
+        if val_prob_all:
+            vp = np.concatenate(val_prob_all, axis=0)
+            vt = np.concatenate(val_true_all, axis=0)
+            try: val_auc = float(roc_auc_score(vt, vp))
+            except Exception: val_auc = np.nan
+            try: val_ll  = float(log_loss(vt, vp, labels=[0, 1]))
+            except Exception: val_ll  = np.nan
+            try: val_bri = float(brier_score_loss(vt, vp))
+            except Exception: val_bri = np.nan
+        else:
+            val_auc = val_ll = val_bri = np.nan
+
+        for r in rows:
+            r['val_auc'] = val_auc
+            r['val_logloss'] = val_ll
+            r['val_brier'] = val_bri
+
+        return rows
+
+    # ------------------ Parallel parameter search ------------------
+    total_tasks = len(all_param_dicts)
+    if base_model == "mlp":
+        eff_jobs = min(max(1, cpu_jobs), 4)
+        prefer = "threads"; backend = "threading"; pre_dispatch = eff_jobs
+        ctx = parallel_backend(backend, n_jobs=eff_jobs)
+    else:
+        eff_jobs = max(1, min(cpu_jobs, 4)) if cpu_jobs != -1 else 4
+        prefer = "processes"; backend = "loky"; pre_dispatch = f"{2*eff_jobs}"
+        ctx = parallel_backend(backend, n_jobs=eff_jobs, inner_max_num_threads=1)
+
+    with ctx:
+        try:
+            with tqdm_joblib(tqdm(total=total_tasks, desc=f"Param search ({search_mode}, {base_model})")) as _:
+                out = Parallel(
+                    n_jobs=eff_jobs, batch_size=1, prefer=prefer, pre_dispatch=pre_dispatch
+                )(
+                    delayed(evaluate_param_set)(pd_, i, total_tasks)
+                    for i, pd_ in enumerate(all_param_dicts)
+                )
+        except OSError as e:
+            print(f"[WARN] Parallel failed with {e}. Falling back to serial search...")
+            out = []
+            for i, pd_ in enumerate(tqdm(all_param_dicts, desc=f"Param search (serial, {base_model})")):
+                out.append(evaluate_param_set(pd_, i, total_tasks))
+
+    val_rows = [r for sub in out for r in sub]
+    if not val_rows:
+        raise RuntimeError("No validation rows produced (check folds and input data).")
+    val_df = pd.DataFrame(val_rows)
+
+    # ------------------ Aggregate across folds (VALIDATION) ------------------
+    param_keys = list((xgb_param_grid if base_model == "xgb" else mlp_param_grid).keys())
+    group_cols = param_keys + ['threshold']
+    agg = val_df.groupby(group_cols, as_index=False).agg({
+        'n_preds_val': 'sum',
+        'tp_val': 'sum',
+        'fp_val': 'sum',
+        'val_precision': 'mean',
+        'val_accuracy': 'mean',
+        'val_auc': 'mean',
+        'val_logloss': 'mean',
+        'val_brier': 'mean',
+    })
+
+    # Wilson-LCB & pooled precision
+    agg['val_precision_pooled'] = agg.apply(
+        lambda r: (r['tp_val'] / max(1, (r['tp_val'] + r['fp_val']))), axis=1
+    )
+    agg['val_precision_lcb'] = agg.apply(
+        lambda r: _wilson_lcb(int(r['tp_val']), int(r['fp_val']), conf=val_conf_level), axis=1
+    )
+
+    # Validation gates (mean precision + count)
+    qual = agg[
+        (agg['val_precision'] >= float(precision_test_threshold)) &
+        (agg['n_preds_val'] >= int(min_samples))
+    ].copy()
+    if qual.empty:
+        # nothing qualifies even on validation → treat as failure early
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if save_diagnostics_on_fail:
+            fail_path = os.path.join(out_dir, f"model_metrics_{repr(ht_tag)}_{timestamp}_FAILED.csv")
+            (agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                             ascending=[False, False, False, False])
+                .assign(fail_reason="failed_validation_gate")
+                .to_csv(fail_path, index=False))
+        msg = (f"No strategy met validation gates (precision ≥ {precision_test_threshold} "
+               f"and n_preds_val ≥ {min_samples}) for HT {ht_tag}.")
+        if on_fail == "raise":
+            raise RuntimeError(msg)
+        if on_fail == "warn":
+            print("[WARN]", msg)
+        return {
+            'status': 'failed_validation_gate',
+            'csv': fail_path if save_diagnostics_on_fail else None,
+            'model_pkl': None,
+            'summary_df': None,
+            'validation_table': agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                                                ascending=[False, False, False, False]).reset_index(drop=True)
+        }
+
+    # STRICT validation ordering (conservative first)
+    ranked = qual.sort_values(
+        by=['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
+        ascending=[False, False, False, False]
+    ).reset_index(drop=True)
+
+    topk_val = ranked.head(top_k).reset_index(drop=True)
+
+    # ------------------ Evaluate ALL Top-K on TEST ------------------
+    candidates = []
+    for _, row in topk_val.iterrows():
+        candidates.append({
+            'params': {k: row[k] for k in param_keys if k in row.index},
+            'threshold': float(row['threshold']),
+            'val_precision': float(row['val_precision']),
+            'val_precision_lcb': float(row['val_precision_lcb']),
+            'val_accuracy': float(row['val_accuracy']),
+            'n_preds_val': int(row['n_preds_val']),
+        })
+
+    # Evaluate each Top-K candidate on TEST
+    records_all = []   # every candidate with test metrics + pass/fail reason
+    for cand in candidates:
+        best_params = cast_params(cand['params'])
+        pos = int(y_train_final.sum()); neg = len(y_train_final) - pos
+        spw_final = (neg / pos) if pos > 0 else 1.0
+
+        final_model = build_model(best_params, spw_final)
+        final_sample_weight = None
+        if base_model == "mlp":
+            w_pos = spw_final
+            final_sample_weight = np.where(y_train_final.values == 1, w_pos, 1.0).astype(np.float32)
+
+        fit_model(final_model, X_train_final, y_train_final, X_val_final, y_val_final,
+                  sample_weight=final_sample_weight)
+        final_calibrator = fit_calibrator(final_model, X_val_final, y_val_final)
+
+        y_test_proba = predict_proba_1(final_calibrator, X_test)
+        thr = cand['threshold']
+        y_pred = (y_test_proba >= thr).astype(np.uint8)
+        n_preds_test = int(y_pred.sum())
+        prc_test = precision_score(y_test, y_pred, zero_division=0)
+        acc_test = accuracy_score(y_test, y_pred)
+
+        # TEST GATE checks + reason
+        enough = n_preds_test >= int(min_test_samples)
+        not_collapsed = prc_test >= max(float(precision_test_threshold),
+                                        float(cand['val_precision']) - float(max_precision_drop))
+        pass_gate = bool(enough and not_collapsed)
+        reason = ""
+        if not pass_gate:
+            if not enough and not not_collapsed:
+                reason = "insufficient_test_preds_and_precision_collapse"
+            elif not enough:
+                reason = "insufficient_test_preds"
+            else:
+                reason = "precision_collapse"
+
+        records_all.append({
+            **cand['params'],
+            'threshold': thr,
+            'val_precision_lcb': cand['val_precision_lcb'],
+            'val_precision': cand['val_precision'],
+            'val_accuracy': cand['val_accuracy'],
+            'n_preds_val': cand['n_preds_val'],
+            'n_preds_test': n_preds_test,
+            'test_precision': float(prc_test),
+            'test_accuracy': float(acc_test),
+            'pass_test_gate': pass_gate,
+            'fail_reason': reason,
+            'model_obj': final_calibrator if pass_gate else None,
+        })
+
+    survivors_df = pd.DataFrame(records_all)
+    passers = survivors_df[survivors_df['pass_test_gate']].copy()
+
+    # ------------------ Persist outputs ------------------
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = "xgb" if base_model == "xgb" else "mlp"
+
+    if passers.empty:
+        # No survivor: write diagnostics, optionally return or warn instead of raising
+        if save_diagnostics_on_fail:
+            diag = (survivors_df
+                    .drop(columns=['model_obj'])
+                    .sort_values(by=['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                                 ascending=[False, False, False, False])
+                   )
+            fail_csv = os.path.join(out_dir, f"model_metrics_{repr(ht_tag)}_{timestamp}_FAILED.csv")
+            diag.to_csv(fail_csv, index=False)
+        msg = (f"All Top-{len(candidates)} failed the TEST gate "
+               f"(n_preds_test ≥ {min_test_samples} and precision not collapsing) for HT {ht_tag}.")
+        if on_fail == "raise":
+            raise RuntimeError(msg)
+        if on_fail == "warn":
+            print("[WARN]", msg)
+        return {
+            'status': 'failed_test_gate',
+            'csv': fail_csv if save_diagnostics_on_fail else None,
+            'model_pkl': None,
+            'summary_df': diag if save_diagnostics_on_fail else survivors_df.drop(columns=['model_obj']),
+            'validation_table': ranked,
+        }
+
+    # At least one survivor → choose best & save PKL + CSV (only passers)
+    passers_sorted = passers.sort_values(
+        by=['val_precision_lcb', 'val_precision', 'test_precision', 'n_preds_test', 'val_accuracy'],
+        ascending=[False, False, False, False, False]
+    ).reset_index(drop=True)
+
+    pkl_path = os.path.join(
+        r'C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\path_ht_score',
+        f"best_model_{repr(ht_tag)}_{tag}_calibrated_{timestamp}.pkl"
+    )
+
+    # Prepare CSV (include the PKL path for the winning row only)
+    csv_df = passers_sorted.drop(columns=['model_obj']).copy()
+    csv_df['model_pkl'] = ""
+    csv_df.loc[0, 'model_pkl'] = pkl_path
+
+    csv_path = os.path.join(out_dir, f"model_metrics_{repr(ht_tag)}_{timestamp}.csv")
+    csv_df.to_csv(csv_path, index=False)
+
+    # Save PKL for the top row
+    top_row = passers_sorted.iloc[0]
+    chosen_model = top_row['model_obj']
+    chosen_params = {k: top_row[k] for k in param_keys if k in passers_sorted.columns}
+    chosen_threshold = float(top_row['threshold'])
+
+    joblib.dump(
+        {
+            'model': chosen_model,
+            'threshold': chosen_threshold,
+            'features': features,
+            'base_model': base_model,
+            'best_params': chosen_params,
+            'precision_test_threshold': float(precision_test_threshold),
+            'min_samples': int(min_samples),
+            'min_test_samples': int(min_test_samples),
+            'val_conf_level': float(val_conf_level),
+            'max_precision_drop': float(max_precision_drop),
+            'ht_score': ht_tag,
+            'notes': (
+                'CSV includes only candidates passing test gate; ranked by '
+                'val_precision_lcb → val_precision → test_precision → n_preds_test → val_accuracy. '
+                'Seeds are random each run.'
+            ),
+            'run_seed': int(RUN_SEED),  # for traceability
+        },
+        pkl_path
+    )
+
+    return {
+        'status': 'ok',
+        'csv': csv_path,
+        'model_pkl': pkl_path,
+        'summary_df': csv_df,           # passers only, with model_pkl set on row 0
+        'validation_table': ranked,     # full validation ranking (post-gates)
+    }
+
+def run_models_o25(
+    matches_filtered: pd.DataFrame,
+    features: list,
+    min_samples: int = 200,            # validation gate: min predicted positives across folds
+    min_test_samples: int = 100,       # test gate: min predicted positives on hold-out test
+    precision_test_threshold: float = 0.80,
+    base_model: str = "xgb",           # "xgb" or "mlp"
+    search_mode: str = "random",       # "random" or "grid"
+    n_random_param_sets: int = 10,
+    cpu_jobs: int = 6,
+    top_k: int = 10,
+    thresholds: np.ndarray | None = None,
+    out_dir: str | None = None,
+    # --- anti-overfitting knobs ---
+    val_conf_level: float = 0.99,      # Wilson-LCB confidence for validation precision
+    max_precision_drop: float = 0.02,  # allow at most 10pp drop val → test
+    # --- failure handling ---
+    on_fail: str = "return",           # "return" | "warn" | "raise"
+    save_diagnostics_on_fail: bool = True,
+    market: str = "OVER"
+):
+    """
+    Rolling time-ordered CV (no leakage) with calibration and robust failure handling.
+
+    Random every run:
+      - Hyper-parameter samples change each call (fresh entropy).
+      - Model random_state changes each call (stable within-run per param set).
+
+    Selection:
+      1) Evaluate candidates on rolling validation across thresholds; track TP/FP.
+      2) Rank by Wilson LCB of validation precision, then mean val precision, n_preds_val, val_accuracy.
+      3) Take Top-K by that ranking. Fit on pre-test, calibrate on small final-val window,
+         evaluate on TEST at each chosen threshold.
+      4) TEST GATE: keep ONLY rows with
+            n_preds_test ≥ min_test_samples
+         AND test_precision ≥ max(precision_test_threshold, val_precision - max_precision_drop).
+      5) Save CSV with ONLY survivors (includes 'model_pkl' for the top row), and save PKL for the top survivor.
+
+    Failure case (no survivors):
+      - If save_diagnostics_on_fail=True, writes a *_FAILED.csv with all Top-K test results and 'fail_reason'.
+      - Behaviour controlled by `on_fail`: "return" (default), "warn", or "raise".
+    """
+    # ------------------ Imports & setup ------------------
+    import os, secrets, hashlib
+    from datetime import datetime
+    import numpy as np
+    import pandas as pd
+    from itertools import product
+    from math import sqrt
+    from sklearn.model_selection import ParameterSampler
+    from sklearn.metrics import precision_score, accuracy_score, roc_auc_score, log_loss, brier_score_loss
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.pipeline import Pipeline, make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.neural_network import MLPClassifier
+    from joblib import Parallel, delayed, parallel_backend
+    from tqdm import tqdm
+    from tqdm_joblib import tqdm_joblib
+    import joblib
+
+    # xgboost (optional)
+    try:
+        import xgboost as xgb
+        _HAS_XGB_LOCAL = True
+    except Exception:
+        _HAS_XGB_LOCAL = False
+
+    # fallbacks for distributions if not defined at module scope
+    try:
+        _randint  # noqa: F821
+        _uniform  # noqa: F821
+        _loguniform  # noqa: F821
+    except NameError:
+        from scipy.stats import randint as _randint
+        from scipy.stats import uniform as _uniform
+        from scipy.stats import loguniform as _loguniform
+
+    # normal quantile for Wilson LCB
+    try:
+        from scipy.stats import norm
+        _Z = lambda conf: float(norm.ppf(1 - (1 - conf) / 2))
+    except Exception:
+        _Z = lambda conf: 1.96 if abs(conf - 0.95) < 1e-6 else 1.64  # crude fallback
+
+    def _wilson_lcb(tp: int, fp: int, conf: float) -> float:
+        n = tp + fp
+        if n <= 0:
+            return 0.0
+        p = tp / n
+        z = _Z(conf)
+        denom = 1.0 + (z*z)/n
+        centre = p + (z*z)/(2*n)
+        rad = z * sqrt((p*(1-p)/n) + (z*z)/(4*n*n))
+        return max(0.0, (centre - rad) / denom)
+
+    if thresholds is None:
+        thresholds = np.round(np.arange(0.10, 0.91, 0.01), 2)
+
+    out_dir = out_dir or os.getcwd()
+    os.makedirs(out_dir, exist_ok=True)
+
+    # honour external _HAS_XGB if present, else use local probe
+    _HAS_XGB = globals().get("_HAS_XGB", _HAS_XGB_LOCAL)
+    if base_model == "xgb" and not _HAS_XGB:
+        raise ImportError("XGBoost not available; set base_model='mlp' or install xgboost.")
+
+    # Fresh run seed → different every invocation
+    RUN_SEED = secrets.randbits(32)
+
+    def _seed_from(*vals) -> int:
+        """Derive a stable (within-run) 31-bit positive seed from RUN_SEED and provided values."""
+        h = hashlib.blake2b(digest_size=8)
+        h.update(int(RUN_SEED).to_bytes(8, 'little', signed=False))
+        for v in vals:
+            h.update(str(v).encode('utf-8'))
+        return int.from_bytes(h.digest(), 'little') & 0x7FFFFFFF
+
+    # ------------------ Data prep ------------------
+    req_cols = {'date', 'target'}
+    missing = req_cols - set(matches_filtered.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    df = matches_filtered.copy()
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.sort_values('date').reset_index(drop=True)
+
+    cols_needed = list(set(features) | {'target'})
+    df = df.dropna(subset=cols_needed).reset_index(drop=True)
+
+    X = df[features].copy()
+    y = df['target'].astype(int).reset_index(drop=True)
+
+    n = len(X)
+    if n < max(min_samples * 3, 500):
+        raise RuntimeError(f"Not enough rows: {n}")
+
+    # ------------------ Temporal split ------------------
+    test_start = int(0.85 * n)
+    pretest_end = test_start
+
+    X_test = X.iloc[test_start:].reset_index(drop=True)
+    y_test = y.iloc[test_start:].reset_index(drop=True)
+
+    # Rolling folds inside [0, pretest_end)
+    N_FOLDS = 5
+    total_val_len = max(1, int(0.15 * n))
+    val_len = max(1, total_val_len // N_FOLDS)
+    fold_val_ends = [pretest_end - total_val_len + (i + 1) * val_len for i in range(N_FOLDS)]
+    fold_val_starts = [end - val_len for end in fold_val_ends]
+    if fold_val_ends:
+        fold_val_ends[-1] = min(fold_val_ends[-1], pretest_end)
+        fold_val_starts[-1] = max(0, fold_val_ends[-1] - val_len)
+
+    # Final small validation slice (for calibration before test)
+    final_val_len = max(1, val_len)
+    final_val_start = max(0, test_start - final_val_len)
+    X_train_final = X.iloc[:final_val_start]
+    y_train_final = y.iloc[:final_val_start]
+    X_val_final   = X.iloc[final_val_start:test_start]
+    y_val_final   = y.iloc[final_val_start:test_start]
+
+    # ------------------ Hyper-parameter spaces ------------------
+    xgb_param_grid = {
+        'n_estimators':      [200],
+        'max_depth':         [5],
+        'learning_rate':     [0.1],
+        'subsample':         [0.7],
+        'colsample_bytree':  [1.0],
+        'min_child_weight':  [5],
+        'reg_lambda':        [1.0],
+    }
+    xgb_param_distributions = {
+        'n_estimators':      _randint(100, 1001),
+        'max_depth':         _randint(3, 8),
+        'learning_rate':     _loguniform(0.01, 0.2),
+        'min_child_weight':  _randint(3, 13),
+        'subsample':         _uniform(0.7, 0.3),
+        'colsample_bytree':  _uniform(0.6, 0.4),
+        'reg_lambda':        _loguniform(0.1, 10.0),
+    }
+    mlp_param_grid = {
+        'hidden_layer_sizes': [(128,), (256,), (128, 64)],
+        'alpha':              [1e-4],
+        'learning_rate_init': [1e-3],
+        'batch_size':         ['auto'],
+        'max_iter':           [200],
+    }
+    mlp_param_distributions = {
+        'hidden_layer_sizes': [(64,), (128,), (256,), (128, 64), (256, 128)],
+        'alpha':              _loguniform(1e-5, 1e-2),
+        'learning_rate_init': _loguniform(5e-4, 5e-2),
+        'batch_size':         _randint(32, 257),
+        'max_iter':           _randint(150, 401),
+    }
+
+    if search_mode.lower() == "grid":
+        grid, dists = (xgb_param_grid, None) if base_model == "xgb" else (mlp_param_grid, None)
+        all_param_dicts = [dict(zip(grid.keys(), combo)) for combo in product(*grid.values())]
+    else:
+        grid, dists = (xgb_param_grid, xgb_param_distributions) if base_model == "xgb" else (mlp_param_grid, mlp_param_distributions)
+        # Random every run
+        sampler_seed = _seed_from("sampler")
+        all_param_dicts = list(ParameterSampler(dists, n_iter=n_random_param_sets, random_state=sampler_seed))
+
+    # ------------------ Helpers ------------------
+    def cast_params(p: dict) -> dict:
+        q = dict(p)
+        if base_model == "xgb":
+            for k in ['n_estimators', 'max_depth', 'min_child_weight']:
+                if k in q: q[k] = int(q[k])
+            for k in ['learning_rate', 'subsample', 'colsample_bytree', 'reg_lambda']:
+                if k in q: q[k] = float(q[k])
+        else:
+            if 'max_iter' in q: q['max_iter'] = int(q['max_iter'])
+            if 'batch_size' in q and q['batch_size'] != 'auto':
+                q['batch_size'] = int(q['batch_size'])
+            if 'alpha' in q: q['alpha'] = float(q['alpha'])
+            if 'learning_rate_init' in q: q['learning_rate_init'] = float(q['learning_rate_init'])
+            if 'hidden_layer_sizes' in q:
+                h = q['hidden_layer_sizes']
+                q['hidden_layer_sizes'] = tuple(h) if not isinstance(h, tuple) else h
+        return q
+
+    def _final_step_name(estimator):
+        try:
+            if isinstance(estimator, Pipeline):
+                return estimator.steps[-1][0]
+        except Exception:
+            pass
+        return None
+
+    def build_model(params: dict, spw: float):
+        # model seed depends on RUN_SEED and params → changes each run
+        model_seed = _seed_from("model", base_model, tuple(sorted(params.items())))
+        if base_model == "xgb":
+            return xgb.XGBClassifier(
+                objective='binary:logistic',
+                eval_metric='auc',
+                random_state=model_seed,
+                scale_pos_weight=spw,
+                n_jobs=1,
+                tree_method="hist",
+                verbosity=0,
+                **params
+            )
+        else:
+            mlp = MLPClassifier(
+                random_state=model_seed,
+                early_stopping=True,
+                n_iter_no_change=20,
+                validation_fraction=0.1,
+                solver="adam",
+                **params
+            )
+            return make_pipeline(StandardScaler(with_mean=True, with_std=True), mlp)
+
+    def fit_model(model, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None):
+        if base_model == "xgb":
+            try:
+                model.set_params(verbosity=0, early_stopping_rounds=50)
+                if X_va is not None and y_va is not None:
+                    model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
+                else:
+                    model.fit(X_tr, y_tr, verbose=False)
+            except Exception:
+                model.fit(X_tr, y_tr, verbose=False)
+        else:
+            fit_kwargs = {}
+            if sample_weight is not None:
+                stepname = _final_step_name(model)
+                if stepname is not None:
+                    fit_kwargs[f"{stepname}__sample_weight"] = sample_weight
+            try:
+                model.fit(X_tr, y_tr, **fit_kwargs)
+            except TypeError:
+                model.fit(X_tr, y_tr)
+
+    def fit_calibrator(fitted, X_va, y_va):
+        try:
+            from sklearn.calibration import FrozenEstimator
+            frozen = FrozenEstimator(fitted)
+            cal = CalibratedClassifierCV(frozen, method='sigmoid', cv=None)
+            cal.fit(X_va, y_va)
+            return cal
+        except Exception:
+            try:
+                cal = CalibratedClassifierCV(fitted, method='sigmoid', cv='prefit')
+                cal.fit(X_va, y_va)
+                return cal
+            except Exception:
+                return fitted
+
+    def predict_proba_1(model_or_cal, X_):
+        proba = model_or_cal.predict_proba(X_)
+        return proba[:, 1].astype(np.float32) if proba.ndim == 2 else np.asarray(proba, dtype=np.float32)
+
+    # ------------------ Rolling-CV evaluator (VALIDATION) ------------------
+    def evaluate_param_set(param_dict, task_id=None, total_tasks=None):
+        safe = cast_params(param_dict)
+        rows = []
+        val_prob_all, val_true_all = [], []
+
+        for vstart, vend in zip(fold_val_starts, fold_val_ends):
+            if vstart is None or vend is None or vstart <= 0 or vend <= vstart:
+                continue
+
+            X_tr, y_tr = X.iloc[:vstart], y.iloc[:vstart]
+            X_va, y_va = X.iloc[vstart:vend], y.iloc[vstart:vend]
+
+            pos = int(y_tr.sum()); neg = len(y_tr) - pos
+            spw = (neg / pos) if pos > 0 else 1.0
+
+            sample_weight = None
+            if base_model == "mlp":
+                w_pos = spw
+                sample_weight = np.where(y_tr.values == 1, w_pos, 1.0).astype(np.float32)
+
+            model = build_model(safe, spw)
+            fit_model(model, X_tr, y_tr, X_va, y_va, sample_weight=sample_weight)
+
+            cal = fit_calibrator(model, X_va, y_va)
+            proba_va = predict_proba_1(cal, X_va)
+
+            val_prob_all.append(proba_va)
+            y_true = y_va.values.astype(np.uint8)
+            val_true_all.append(y_true)
+
+            for thr in thresholds:
+                y_pred = (proba_va >= thr).astype(np.uint8)
+                n_preds = int(y_pred.sum())
+                tp = int(((y_true == 1) & (y_pred == 1)).sum())
+                fp = int(((y_true == 0) & (y_pred == 1)).sum())
+                prc = precision_score(y_va, y_pred, zero_division=0)
+                acc = accuracy_score(y_va, y_pred)
+
+                rows.append({
+                    **safe,
+                    'threshold': float(thr),
+                    'fold_vstart': int(vstart),
+                    'fold_vend': int(vend),
+                    'n_preds_val': n_preds,
+                    'tp_val': tp,
+                    'fp_val': fp,
+                    'val_precision': float(prc),
+                    'val_accuracy': float(acc),
+                })
+
+        # pooled diagnostics (optional)
+        if val_prob_all:
+            vp = np.concatenate(val_prob_all, axis=0)
+            vt = np.concatenate(val_true_all, axis=0)
+            try: val_auc = float(roc_auc_score(vt, vp))
+            except Exception: val_auc = np.nan
+            try: val_ll  = float(log_loss(vt, vp, labels=[0, 1]))
+            except Exception: val_ll  = np.nan
+            try: val_bri = float(brier_score_loss(vt, vp))
+            except Exception: val_bri = np.nan
+        else:
+            val_auc = val_ll = val_bri = np.nan
+
+        for r in rows:
+            r['val_auc'] = val_auc
+            r['val_logloss'] = val_ll
+            r['val_brier'] = val_bri
+
+        return rows
+
+    # ------------------ Parallel parameter search ------------------
+    total_tasks = len(all_param_dicts)
+    if base_model == "mlp":
+        eff_jobs = min(max(1, cpu_jobs), 4)
+        prefer = "threads"; backend = "threading"; pre_dispatch = eff_jobs
+        ctx = parallel_backend(backend, n_jobs=eff_jobs)
+    else:
+        eff_jobs = max(1, min(cpu_jobs, 4)) if cpu_jobs != -1 else 4
+        prefer = "processes"; backend = "loky"; pre_dispatch = f"{2*eff_jobs}"
+        ctx = parallel_backend(backend, n_jobs=eff_jobs, inner_max_num_threads=1)
+
+    with ctx:
+        try:
+            with tqdm_joblib(tqdm(total=total_tasks, desc=f"Param search ({search_mode}, {base_model})")) as _:
+                out = Parallel(
+                    n_jobs=eff_jobs, batch_size=1, prefer=prefer, pre_dispatch=pre_dispatch
+                )(
+                    delayed(evaluate_param_set)(pd_, i, total_tasks)
+                    for i, pd_ in enumerate(all_param_dicts)
+                )
+        except OSError as e:
+            print(f"[WARN] Parallel failed with {e}. Falling back to serial search...")
+            out = []
+            for i, pd_ in enumerate(tqdm(all_param_dicts, desc=f"Param search (serial, {base_model})")):
+                out.append(evaluate_param_set(pd_, i, total_tasks))
+
+    val_rows = [r for sub in out for r in sub]
+    if not val_rows:
+        raise RuntimeError("No validation rows produced (check folds and input data).")
+    val_df = pd.DataFrame(val_rows)
+
+    # ------------------ Aggregate across folds (VALIDATION) ------------------
+    param_keys = list((xgb_param_grid if base_model == "xgb" else mlp_param_grid).keys())
+    group_cols = param_keys + ['threshold']
+    agg = val_df.groupby(group_cols, as_index=False).agg({
+        'n_preds_val': 'sum',
+        'tp_val': 'sum',
+        'fp_val': 'sum',
+        'val_precision': 'mean',
+        'val_accuracy': 'mean',
+        'val_auc': 'mean',
+        'val_logloss': 'mean',
+        'val_brier': 'mean',
+    })
+
+    # Wilson-LCB & pooled precision
+    agg['val_precision_pooled'] = agg.apply(
+        lambda r: (r['tp_val'] / max(1, (r['tp_val'] + r['fp_val']))), axis=1
+    )
+    agg['val_precision_lcb'] = agg.apply(
+        lambda r: _wilson_lcb(int(r['tp_val']), int(r['fp_val']), conf=val_conf_level), axis=1
+    )
+
+    # Validation gates (mean precision + count)
+    qual = agg[
+        (agg['val_precision'] >= float(precision_test_threshold)) &
+        (agg['n_preds_val'] >= int(min_samples))
+    ].copy()
+    if qual.empty:
+        # nothing qualifies even on validation → treat as failure early
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if save_diagnostics_on_fail:
+            fail_path = os.path.join(out_dir, f"model_metrics_{timestamp}_FAILED.csv")
+            (agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                             ascending=[False, False, False, False])
+                .assign(fail_reason="failed_validation_gate")
+                .to_csv(fail_path, index=False))
+        msg = (f"No strategy met validation gates (precision ≥ {precision_test_threshold} "
+               f"and n_preds_val ≥ {min_samples}).")
+        if on_fail == "raise":
+            raise RuntimeError(msg)
+        if on_fail == "warn":
+            print("[WARN]", msg)
+        return {
+            'status': 'failed_validation_gate',
+            'csv': fail_path if save_diagnostics_on_fail else None,
+            'model_pkl': None,
+            'summary_df': None,
+            'validation_table': agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                                                ascending=[False, False, False, False]).reset_index(drop=True)
+        }
+
+    # STRICT validation ordering (conservative first)
+    ranked = qual.sort_values(
+        by=['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
+        ascending=[False, False, False, False]
+    ).reset_index(drop=True)
+
+    topk_val = ranked.head(top_k).reset_index(drop=True)
+
+    # ------------------ Evaluate ALL Top-K on TEST ------------------
+    candidates = []
+    for _, row in topk_val.iterrows():
+        candidates.append({
+            'params': {k: row[k] for k in param_keys if k in row.index},
+            'threshold': float(row['threshold']),
+            'val_precision': float(row['val_precision']),
+            'val_precision_lcb': float(row['val_precision_lcb']),
+            'val_accuracy': float(row['val_accuracy']),
+            'n_preds_val': int(row['n_preds_val']),
+        })
+
+    # Evaluate each Top-K candidate on TEST
+    records_all = []   # every candidate with test metrics + pass/fail reason
+    for cand in candidates:
+        best_params = cast_params(cand['params'])
+        pos = int(y_train_final.sum()); neg = len(y_train_final) - pos
+        spw_final = (neg / pos) if pos > 0 else 1.0
+
+        final_model = build_model(best_params, spw_final)
+        final_sample_weight = None
+        if base_model == "mlp":
+            w_pos = spw_final
+            final_sample_weight = np.where(y_train_final.values == 1, w_pos, 1.0).astype(np.float32)
+
+        fit_model(final_model, X_train_final, y_train_final, X_val_final, y_val_final,
+                  sample_weight=final_sample_weight)
+        final_calibrator = fit_calibrator(final_model, X_val_final, y_val_final)
+
+        y_test_proba = predict_proba_1(final_calibrator, X_test)
+        thr = cand['threshold']
+        y_pred = (y_test_proba >= thr).astype(np.uint8)
+        n_preds_test = int(y_pred.sum())
+        prc_test = precision_score(y_test, y_pred, zero_division=0)
+        acc_test = accuracy_score(y_test, y_pred)
+
+        # TEST GATE checks + reason
+        enough = n_preds_test >= int(min_test_samples)
+        not_collapsed = prc_test >= max(float(precision_test_threshold),
+                                        float(cand['val_precision']) - float(max_precision_drop))
+        pass_gate = bool(enough and not_collapsed)
+        reason = ""
+        if not pass_gate:
+            if not enough and not not_collapsed:
+                reason = "insufficient_test_preds_and_precision_collapse"
+            elif not enough:
+                reason = "insufficient_test_preds"
+            else:
+                reason = "precision_collapse"
+
+        records_all.append({
+            **cand['params'],
+            'threshold': thr,
+            'val_precision_lcb': cand['val_precision_lcb'],
+            'val_precision': cand['val_precision'],
+            'val_accuracy': cand['val_accuracy'],
+            'n_preds_val': cand['n_preds_val'],
+            'n_preds_test': n_preds_test,
+            'test_precision': float(prc_test),
+            'test_accuracy': float(acc_test),
+            'pass_test_gate': pass_gate,
+            'fail_reason': reason,
+            'model_obj': final_calibrator if pass_gate else None,
+        })
+
+    survivors_df = pd.DataFrame(records_all)
+    passers = survivors_df[survivors_df['pass_test_gate']].copy()
+
+    # ------------------ Persist outputs ------------------
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = "xgb" if base_model == "xgb" else "mlp"
+
+    if passers.empty:
+        # No survivor: write diagnostics, optionally return or warn instead of raising
+        if save_diagnostics_on_fail:
+            diag = (survivors_df
+                    .drop(columns=['model_obj'])
+                    .sort_values(by=['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                                 ascending=[False, False, False, False])
+                   )
+            fail_csv = os.path.join(out_dir, f"model_metrics_{timestamp}_FAILED.csv")
+            diag.to_csv(fail_csv, index=False)
+        msg = (f"All Top-{len(candidates)} failed the TEST gate "
+               f"(n_preds_test ≥ {min_test_samples} and precision not collapsing).")
+        if on_fail == "raise":
+            raise RuntimeError(msg)
+        if on_fail == "warn":
+            print("[WARN]", msg)
+        return {
+            'status': 'failed_test_gate',
+            'csv': fail_csv if save_diagnostics_on_fail else None,
+            'model_pkl': None,
+            'summary_df': diag if save_diagnostics_on_fail else survivors_df.drop(columns=['model_obj']),
+            'validation_table': ranked,
+        }
+
+    # At least one survivor → choose best & save PKL + CSV (only passers)
+    passers_sorted = passers.sort_values(
+        by=['val_precision_lcb', 'val_precision', 'test_precision', 'n_preds_test', 'val_accuracy'],
+        ascending=[False, False, False, False, False]
+    ).reset_index(drop=True)
+
+    # Save PKL next to CSVs
+    if market == 'OVER':
+        pkl_path = os.path.join(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Over_2_5\model_file", f"best_model_{tag}_calibrated_{timestamp}.pkl")
+    else:
+        pkl_path = os.path.join(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Under_2_5\model_file",
+                                f"best_model_{tag}_calibrated_{timestamp}.pkl")
+
+    # Prepare CSV (include the PKL path for the winning row only)
+    csv_df = passers_sorted.drop(columns=['model_obj']).copy()
+    csv_df['model_pkl'] = ""
+    csv_df.loc[0, 'model_pkl'] = pkl_path
+
+    csv_path = os.path.join(out_dir, f"model_metrics_{timestamp}.csv")
+    csv_df.to_csv(csv_path, index=False)
+
+    # Save PKL for the top row
+    top_row = passers_sorted.iloc[0]
+    chosen_model = top_row['model_obj']
+    chosen_params = {k: top_row[k] for k in param_keys if k in passers_sorted.columns}
+    chosen_threshold = float(top_row['threshold'])
+
+    joblib.dump(
+        {
+            'model': chosen_model,
+            'threshold': chosen_threshold,
+            'features': features,
+            'base_model': base_model,
+            'best_params': chosen_params,
+            'precision_test_threshold': float(precision_test_threshold),
+            'min_samples': int(min_samples),
+            'min_test_samples': int(min_test_samples),
+            'val_conf_level': float(val_conf_level),
+            'max_precision_drop': float(max_precision_drop),
+            'notes': (
+                'CSV includes only candidates passing test gate; ranked by '
+                'val_precision_lcb → val_precision → test_precision → n_preds_test → val_accuracy. '
+                'Seeds are random each run.'
+            ),
+            'run_seed': int(RUN_SEED),  # for traceability
+        },
+        pkl_path
+    )
+
+    return {
+        'status': 'ok',
+        'csv': csv_path,
+        'model_pkl': pkl_path,
+        'summary_df': csv_df,           # passers only, with model_pkl set on row 0
+        'validation_table': ranked,     # full validation ranking (post-gates)
+    }
+
+
+
+
+# ---- Simple ersatz rvs helpers (NumPy 2.x compatible) ----
+def _as_rng(random_state):
+    """Return a NumPy Generator, accepting int | RandomState | Generator | None."""
+    if isinstance(random_state, np.random.Generator):
+        return random_state
+    if isinstance(random_state, np.random.RandomState):
+        # Pull a 32-bit value from the legacy MT19937 state (safe for seeding)
+        seed = int(np.uint32(random_state.get_state()[1][0]))
+        return np.random.default_rng(seed)
+    if random_state is None or isinstance(random_state, (int, np.integer)):
+        return np.random.default_rng(None if random_state is None else int(random_state))
+    # Fallback: hash arbitrary objects into a 32-bit seed
+    return np.random.default_rng(abs(hash(random_state)) % (2**32))
+
+def _randint(low, high):
+    class _R:
+        def rvs(self, size=None, random_state=None):
+            rng = _as_rng(random_state)
+            return rng.integers(low, high, size=size)
+    return _R()
+
+def _uniform(a, b):
+    # draws from [a, a+b)
+    class _R:
+        def rvs(self, size=None, random_state=None):
+            rng = _as_rng(random_state)
+            return rng.uniform(a, a + b, size=size)
+    return _R()
+
+def _loguniform(a, b):
+    # log-uniform on [a, b]
+    class _R:
+        def rvs(self, size=None, random_state=None):
+            rng = _as_rng(random_state)
+            lo, hi = np.log(a), np.log(b)
+            return np.exp(rng.uniform(lo, hi, size=size))
+    return _R()
+
+
+
 def run_models_with_probs(data, features, filename_feature, min_samples=100, apply_calibration=True):
     """
     Run grid-search experiments over different models.

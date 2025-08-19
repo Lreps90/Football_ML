@@ -811,7 +811,7 @@ if __name__ == "__main__":
 
     start = time.time()
 
-    matches = fl.pre_prepared_data(r"C:\Users\leere\PycharmProjects\Football_ML3\engineered_master_data_ALL_2017+.csv")
+    matches = fl.pre_prepared_data(r"/engineered_master_data_ALL_2017+.csv")
 
 
     # 2. Create dummies for the 'county' column
