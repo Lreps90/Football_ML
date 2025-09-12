@@ -789,8 +789,8 @@ def pre_prepared_data(file_path):
     # Clean up and finalise the match-level DataFrame
     data.dropna(inplace=True)
     #data['ht_score'] = data['home_goals_ht'].astype(str) + '-' + data['away_goals_ht'].astype(str)
-    data['total_goals'] = data['home_goals_ft'] + data['away_goals_ft']
-    data['target'] = (data['total_goals']) < 2.5
+    # 1 if away does not win (home win or draw), 0 if away wins
+    data['target'] = (data['away_goals_ft'] == data['home_goals_ft']).astype(int)
     return data
 
 
@@ -835,11 +835,11 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    fl.run_models_25(matches, features, min_samples=1000, min_test_samples=1000,
-                     precision_test_threshold = 0.6,
+    fl.run_models_outcome(matches, features, min_samples=250, min_test_samples=250,
+                     precision_test_threshold = 0.2,
                      n_random_param_sets = 500,
-                     cpu_jobs=5,
-                     market = 'UNDER'
+                     cpu_jobs=4,
+                     market = 'BACK_DRAW'
                      )
 
     end = time.time()

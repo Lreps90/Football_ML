@@ -1,21 +1,41 @@
 # import datetime
 import random as rd
 from collections import Counter
-from datetime import datetime
-
 import numpy as np
 import pandas as pd
-from imblearn.over_sampling import SMOTE
-from scipy import stats
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import matthews_corrcoef, accuracy_score, f1_score, roc_auc_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split, ParameterGrid
-from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import roc_auc_score, precision_score
+from imblearn.over_sampling import SMOTE
+from scipy import stats
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import matthews_corrcoef, f1_score, recall_score
 from xgboost import XGBClassifier
+import os
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+os.environ.setdefault("XGBOOST_VERBOSITY", "0")
+
+from datetime import datetime
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    accuracy_score
+)
+from sklearn.neural_network import MLPClassifier
+
+try:
+    import xgboost as xgb
+
+    _HAS_XGB = True
+except Exception:
+    _HAS_XGB = False
 
 
 def create_import_file(df, output_file_path, provider="", market_name="", selection_name=""):
@@ -858,57 +878,26 @@ def run_models(data, features, filename_feature, min_samples=100, apply_pca=True
         # print(f"No metrics were recorded for {filename_feature}.")
 
 
-import os
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
-os.environ.setdefault("XGBOOST_VERBOSITY", "0")
-
-from datetime import datetime
-from itertools import product
-import numpy as np
-import pandas as pd
-from joblib import Parallel, delayed, parallel_backend
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    roc_auc_score, log_loss, brier_score_loss,
-    precision_score, accuracy_score
-)
-from sklearn.model_selection import ParameterSampler
-from sklearn.neural_network import MLPClassifier
-from sklearn.pipeline import make_pipeline, Pipeline
-from sklearn.preprocessing import StandardScaler
-import joblib
-from tqdm import tqdm
-from tqdm_joblib import tqdm_joblib
-
-try:
-    import xgboost as xgb
-    _HAS_XGB = True
-except Exception:
-    _HAS_XGB = False
-
 def run_models_v2(
-    matches_filtered: pd.DataFrame,
-    features: list,
-    ht_score: tuple | str,
-    min_samples: int = 200,            # validation gate: min predicted positives across folds
-    min_test_samples: int = 100,       # test gate: min predicted positives on hold-out test
-    precision_test_threshold: float = 0.80,
-    base_model: str = "xgb",           # "xgb" or "mlp"
-    search_mode: str = "random",       # "random" or "grid"
-    n_random_param_sets: int = 10,
-    cpu_jobs: int = 6,
-    top_k: int = 10,
-    thresholds: np.ndarray | None = None,
-    out_dir: str | None = None,
-    # --- anti-overfitting knobs ---
-    val_conf_level: float = 0.95,      # Wilson-LCB confidence for validation precision
-    max_precision_drop: float = 0.10,  # allow at most 10pp drop val → test
-    # --- failure handling ---
-    on_fail: str = "return",           # "return" | "warn" | "raise"
-    save_diagnostics_on_fail: bool = True,
+        matches_filtered: pd.DataFrame,
+        features: list,
+        ht_score: tuple | str,
+        min_samples: int = 200,  # validation gate: min predicted positives across folds
+        min_test_samples: int = 100,  # test gate: min predicted positives on hold-out test
+        precision_test_threshold: float = 0.80,
+        base_model: str = "xgb",  # "xgb" or "mlp"
+        search_mode: str = "random",  # "random" or "grid"
+        n_random_param_sets: int = 10,
+        cpu_jobs: int = 6,
+        top_k: int = 10,
+        thresholds: np.ndarray | None = None,
+        out_dir: str | None = None,
+        # --- anti-overfitting knobs ---
+        val_conf_level: float = 0.95,  # Wilson-LCB confidence for validation precision
+        max_precision_drop: float = 0.10,  # allow at most 10pp drop val → test
+        # --- failure handling ---
+        on_fail: str = "return",  # "return" | "warn" | "raise"
+        save_diagnostics_on_fail: bool = True,
 ):
     """
     Rolling time-ordered CV (no leakage) with calibration and robust failure handling.
@@ -979,9 +968,9 @@ def run_models_v2(
             return 0.0
         p = tp / n
         z = _Z(conf)
-        denom = 1.0 + (z*z)/n
-        centre = p + (z*z)/(2*n)
-        rad = z * sqrt((p*(1-p)/n) + (z*z)/(4*n*n))
+        denom = 1.0 + (z * z) / n
+        centre = p + (z * z) / (2 * n)
+        rad = z * sqrt((p * (1 - p) / n) + (z * z) / (4 * n * n))
         return max(0.0, (centre - rad) / denom)
 
     if thresholds is None:
@@ -1049,48 +1038,49 @@ def run_models_v2(
     final_val_start = max(0, test_start - final_val_len)
     X_train_final = X.iloc[:final_val_start]
     y_train_final = y.iloc[:final_val_start]
-    X_val_final   = X.iloc[final_val_start:test_start]
-    y_val_final   = y.iloc[final_val_start:test_start]
+    X_val_final = X.iloc[final_val_start:test_start]
+    y_val_final = y.iloc[final_val_start:test_start]
 
     # ------------------ Hyper-parameter spaces ------------------
     xgb_param_grid = {
-        'n_estimators':      [200],
-        'max_depth':         [5],
-        'learning_rate':     [0.1],
-        'subsample':         [0.7],
-        'colsample_bytree':  [1.0],
-        'min_child_weight':  [5],
-        'reg_lambda':        [1.0],
+        'n_estimators': [200],
+        'max_depth': [5],
+        'learning_rate': [0.1],
+        'subsample': [0.7],
+        'colsample_bytree': [1.0],
+        'min_child_weight': [5],
+        'reg_lambda': [1.0],
     }
     xgb_param_distributions = {
-        'n_estimators':      _randint(100, 1001),
-        'max_depth':         _randint(3, 8),
-        'learning_rate':     _loguniform(0.01, 0.2),
-        'min_child_weight':  _randint(3, 13),
-        'subsample':         _uniform(0.7, 0.3),
-        'colsample_bytree':  _uniform(0.6, 0.4),
-        'reg_lambda':        _loguniform(0.1, 10.0),
+        'n_estimators': _randint(100, 1001),
+        'max_depth': _randint(3, 8),
+        'learning_rate': _loguniform(0.01, 0.2),
+        'min_child_weight': _randint(3, 13),
+        'subsample': _uniform(0.7, 0.3),
+        'colsample_bytree': _uniform(0.6, 0.4),
+        'reg_lambda': _loguniform(0.1, 10.0),
     }
     mlp_param_grid = {
         'hidden_layer_sizes': [(128,), (256,), (128, 64)],
-        'alpha':              [1e-4],
+        'alpha': [1e-4],
         'learning_rate_init': [1e-3],
-        'batch_size':         ['auto'],
-        'max_iter':           [200],
+        'batch_size': ['auto'],
+        'max_iter': [200],
     }
     mlp_param_distributions = {
         'hidden_layer_sizes': [(64,), (128,), (256,), (128, 64), (256, 128)],
-        'alpha':              _loguniform(1e-5, 1e-2),
+        'alpha': _loguniform(1e-5, 1e-2),
         'learning_rate_init': _loguniform(5e-4, 5e-2),
-        'batch_size':         _randint(32, 257),
-        'max_iter':           _randint(150, 401),
+        'batch_size': _randint(32, 257),
+        'max_iter': _randint(150, 401),
     }
 
     if search_mode.lower() == "grid":
         grid, dists = (xgb_param_grid, None) if base_model == "xgb" else (mlp_param_grid, None)
         all_param_dicts = [dict(zip(grid.keys(), combo)) for combo in product(*grid.values())]
     else:
-        grid, dists = (xgb_param_grid, xgb_param_distributions) if base_model == "xgb" else (mlp_param_grid, mlp_param_distributions)
+        grid, dists = (xgb_param_grid, xgb_param_distributions) if base_model == "xgb" else (mlp_param_grid,
+                                                                                             mlp_param_distributions)
         # Random every run
         sampler_seed = _seed_from("sampler")
         all_param_dicts = list(ParameterSampler(dists, n_iter=n_random_param_sets, random_state=sampler_seed))
@@ -1200,7 +1190,8 @@ def run_models_v2(
             X_tr, y_tr = X.iloc[:vstart], y.iloc[:vstart]
             X_va, y_va = X.iloc[vstart:vend], y.iloc[vstart:vend]
 
-            pos = int(y_tr.sum()); neg = len(y_tr) - pos
+            pos = int(y_tr.sum());
+            neg = len(y_tr) - pos
             spw = (neg / pos) if pos > 0 else 1.0
 
             sample_weight = None
@@ -1242,12 +1233,18 @@ def run_models_v2(
         if val_prob_all:
             vp = np.concatenate(val_prob_all, axis=0)
             vt = np.concatenate(val_true_all, axis=0)
-            try: val_auc = float(roc_auc_score(vt, vp))
-            except Exception: val_auc = np.nan
-            try: val_ll  = float(log_loss(vt, vp, labels=[0, 1]))
-            except Exception: val_ll  = np.nan
-            try: val_bri = float(brier_score_loss(vt, vp))
-            except Exception: val_bri = np.nan
+            try:
+                val_auc = float(roc_auc_score(vt, vp))
+            except Exception:
+                val_auc = np.nan
+            try:
+                val_ll = float(log_loss(vt, vp, labels=[0, 1]))
+            except Exception:
+                val_ll = np.nan
+            try:
+                val_bri = float(brier_score_loss(vt, vp))
+            except Exception:
+                val_bri = np.nan
         else:
             val_auc = val_ll = val_bri = np.nan
 
@@ -1262,11 +1259,15 @@ def run_models_v2(
     total_tasks = len(all_param_dicts)
     if base_model == "mlp":
         eff_jobs = min(max(1, cpu_jobs), 4)
-        prefer = "threads"; backend = "threading"; pre_dispatch = eff_jobs
+        prefer = "threads";
+        backend = "threading";
+        pre_dispatch = eff_jobs
         ctx = parallel_backend(backend, n_jobs=eff_jobs)
     else:
         eff_jobs = max(1, min(cpu_jobs, 4)) if cpu_jobs != -1 else 4
-        prefer = "processes"; backend = "loky"; pre_dispatch = f"{2*eff_jobs}"
+        prefer = "processes";
+        backend = "loky";
+        pre_dispatch = f"{2 * eff_jobs}"
         ctx = parallel_backend(backend, n_jobs=eff_jobs, inner_max_num_threads=1)
 
     with ctx:
@@ -1315,16 +1316,16 @@ def run_models_v2(
     qual = agg[
         (agg['val_precision'] >= float(precision_test_threshold)) &
         (agg['n_preds_val'] >= int(min_samples))
-    ].copy()
+        ].copy()
     if qual.empty:
         # nothing qualifies even on validation → treat as failure early
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if save_diagnostics_on_fail:
             fail_path = os.path.join(out_dir, f"model_metrics_{repr(ht_tag)}_{timestamp}_FAILED.csv")
-            (agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+            (agg.sort_values(['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
                              ascending=[False, False, False, False])
-                .assign(fail_reason="failed_validation_gate")
-                .to_csv(fail_path, index=False))
+             .assign(fail_reason="failed_validation_gate")
+             .to_csv(fail_path, index=False))
         msg = (f"No strategy met validation gates (precision ≥ {precision_test_threshold} "
                f"and n_preds_val ≥ {min_samples}) for HT {ht_tag}.")
         if on_fail == "raise":
@@ -1336,7 +1337,7 @@ def run_models_v2(
             'csv': fail_path if save_diagnostics_on_fail else None,
             'model_pkl': None,
             'summary_df': None,
-            'validation_table': agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+            'validation_table': agg.sort_values(['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
                                                 ascending=[False, False, False, False]).reset_index(drop=True)
         }
 
@@ -1361,10 +1362,11 @@ def run_models_v2(
         })
 
     # Evaluate each Top-K candidate on TEST
-    records_all = []   # every candidate with test metrics + pass/fail reason
+    records_all = []  # every candidate with test metrics + pass/fail reason
     for cand in candidates:
         best_params = cast_params(cand['params'])
-        pos = int(y_train_final.sum()); neg = len(y_train_final) - pos
+        pos = int(y_train_final.sum());
+        neg = len(y_train_final) - pos
         spw_final = (neg / pos) if pos > 0 else 1.0
 
         final_model = build_model(best_params, spw_final)
@@ -1425,9 +1427,9 @@ def run_models_v2(
         if save_diagnostics_on_fail:
             diag = (survivors_df
                     .drop(columns=['model_obj'])
-                    .sort_values(by=['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                    .sort_values(by=['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
                                  ascending=[False, False, False, False])
-                   )
+                    )
             fail_csv = os.path.join(out_dir, f"model_metrics_{repr(ht_tag)}_{timestamp}_FAILED.csv")
             diag.to_csv(fail_csv, index=False)
         msg = (f"All Top-{len(candidates)} failed the TEST gate "
@@ -1496,30 +1498,31 @@ def run_models_v2(
         'status': 'ok',
         'csv': csv_path,
         'model_pkl': pkl_path,
-        'summary_df': csv_df,           # passers only, with model_pkl set on row 0
-        'validation_table': ranked,     # full validation ranking (post-gates)
+        'summary_df': csv_df,  # passers only, with model_pkl set on row 0
+        'validation_table': ranked,  # full validation ranking (post-gates)
     }
 
-def run_models_o25(
-    matches_filtered: pd.DataFrame,
-    features: list,
-    min_samples: int = 200,            # validation gate: min predicted positives across folds
-    min_test_samples: int = 100,       # test gate: min predicted positives on hold-out test
-    precision_test_threshold: float = 0.80,
-    base_model: str = "xgb",           # "xgb" or "mlp"
-    search_mode: str = "random",       # "random" or "grid"
-    n_random_param_sets: int = 10,
-    cpu_jobs: int = 6,
-    top_k: int = 10,
-    thresholds: np.ndarray | None = None,
-    out_dir: str | None = None,
-    # --- anti-overfitting knobs ---
-    val_conf_level: float = 0.99,      # Wilson-LCB confidence for validation precision
-    max_precision_drop: float = 0.02,  # allow at most 10pp drop val → test
-    # --- failure handling ---
-    on_fail: str = "return",           # "return" | "warn" | "raise"
-    save_diagnostics_on_fail: bool = True,
-    market: str = "OVER"
+
+def run_models_25(
+        matches_filtered: pd.DataFrame,
+        features: list,
+        min_samples: int = 200,  # validation gate: min predicted positives across folds
+        min_test_samples: int = 100,  # test gate: min predicted positives on hold-out test
+        precision_test_threshold: float = 0.80,
+        base_model: str = "xgb",  # "xgb" or "mlp"
+        search_mode: str = "random",  # "random" or "grid"
+        n_random_param_sets: int = 10,
+        cpu_jobs: int = 6,
+        top_k: int = 10,
+        thresholds: np.ndarray | None = None,
+        out_dir: str | None = None,
+        # --- anti-overfitting knobs ---
+        val_conf_level: float = 0.99,  # Wilson-LCB confidence for validation precision
+        max_precision_drop: float = 0.02,  # allow at most 10pp drop val → test
+        # --- failure handling ---
+        on_fail: str = "return",  # "return" | "warn" | "raise"
+        save_diagnostics_on_fail: bool = True,
+        market: str = "OVER"
 ):
     """
     Rolling time-ordered CV (no leakage) with calibration and robust failure handling.
@@ -1590,9 +1593,9 @@ def run_models_o25(
             return 0.0
         p = tp / n
         z = _Z(conf)
-        denom = 1.0 + (z*z)/n
-        centre = p + (z*z)/(2*n)
-        rad = z * sqrt((p*(1-p)/n) + (z*z)/(4*n*n))
+        denom = 1.0 + (z * z) / n
+        centre = p + (z * z) / (2 * n)
+        rad = z * sqrt((p * (1 - p) / n) + (z * z) / (4 * n * n))
         return max(0.0, (centre - rad) / denom)
 
     if thresholds is None:
@@ -1659,48 +1662,49 @@ def run_models_o25(
     final_val_start = max(0, test_start - final_val_len)
     X_train_final = X.iloc[:final_val_start]
     y_train_final = y.iloc[:final_val_start]
-    X_val_final   = X.iloc[final_val_start:test_start]
-    y_val_final   = y.iloc[final_val_start:test_start]
+    X_val_final = X.iloc[final_val_start:test_start]
+    y_val_final = y.iloc[final_val_start:test_start]
 
     # ------------------ Hyper-parameter spaces ------------------
     xgb_param_grid = {
-        'n_estimators':      [200],
-        'max_depth':         [5],
-        'learning_rate':     [0.1],
-        'subsample':         [0.7],
-        'colsample_bytree':  [1.0],
-        'min_child_weight':  [5],
-        'reg_lambda':        [1.0],
+        'n_estimators': [200],
+        'max_depth': [5],
+        'learning_rate': [0.1],
+        'subsample': [0.7],
+        'colsample_bytree': [1.0],
+        'min_child_weight': [5],
+        'reg_lambda': [1.0],
     }
     xgb_param_distributions = {
-        'n_estimators':      _randint(100, 1001),
-        'max_depth':         _randint(3, 8),
-        'learning_rate':     _loguniform(0.01, 0.2),
-        'min_child_weight':  _randint(3, 13),
-        'subsample':         _uniform(0.7, 0.3),
-        'colsample_bytree':  _uniform(0.6, 0.4),
-        'reg_lambda':        _loguniform(0.1, 10.0),
+        'n_estimators': _randint(100, 1001),
+        'max_depth': _randint(3, 8),
+        'learning_rate': _loguniform(0.01, 0.2),
+        'min_child_weight': _randint(3, 13),
+        'subsample': _uniform(0.7, 0.3),
+        'colsample_bytree': _uniform(0.6, 0.4),
+        'reg_lambda': _loguniform(0.1, 10.0),
     }
     mlp_param_grid = {
         'hidden_layer_sizes': [(128,), (256,), (128, 64)],
-        'alpha':              [1e-4],
+        'alpha': [1e-4],
         'learning_rate_init': [1e-3],
-        'batch_size':         ['auto'],
-        'max_iter':           [200],
+        'batch_size': ['auto'],
+        'max_iter': [200],
     }
     mlp_param_distributions = {
         'hidden_layer_sizes': [(64,), (128,), (256,), (128, 64), (256, 128)],
-        'alpha':              _loguniform(1e-5, 1e-2),
+        'alpha': _loguniform(1e-5, 1e-2),
         'learning_rate_init': _loguniform(5e-4, 5e-2),
-        'batch_size':         _randint(32, 257),
-        'max_iter':           _randint(150, 401),
+        'batch_size': _randint(32, 257),
+        'max_iter': _randint(150, 401),
     }
 
     if search_mode.lower() == "grid":
         grid, dists = (xgb_param_grid, None) if base_model == "xgb" else (mlp_param_grid, None)
         all_param_dicts = [dict(zip(grid.keys(), combo)) for combo in product(*grid.values())]
     else:
-        grid, dists = (xgb_param_grid, xgb_param_distributions) if base_model == "xgb" else (mlp_param_grid, mlp_param_distributions)
+        grid, dists = (xgb_param_grid, xgb_param_distributions) if base_model == "xgb" else (mlp_param_grid,
+                                                                                             mlp_param_distributions)
         # Random every run
         sampler_seed = _seed_from("sampler")
         all_param_dicts = list(ParameterSampler(dists, n_iter=n_random_param_sets, random_state=sampler_seed))
@@ -1810,7 +1814,8 @@ def run_models_o25(
             X_tr, y_tr = X.iloc[:vstart], y.iloc[:vstart]
             X_va, y_va = X.iloc[vstart:vend], y.iloc[vstart:vend]
 
-            pos = int(y_tr.sum()); neg = len(y_tr) - pos
+            pos = int(y_tr.sum());
+            neg = len(y_tr) - pos
             spw = (neg / pos) if pos > 0 else 1.0
 
             sample_weight = None
@@ -1852,12 +1857,18 @@ def run_models_o25(
         if val_prob_all:
             vp = np.concatenate(val_prob_all, axis=0)
             vt = np.concatenate(val_true_all, axis=0)
-            try: val_auc = float(roc_auc_score(vt, vp))
-            except Exception: val_auc = np.nan
-            try: val_ll  = float(log_loss(vt, vp, labels=[0, 1]))
-            except Exception: val_ll  = np.nan
-            try: val_bri = float(brier_score_loss(vt, vp))
-            except Exception: val_bri = np.nan
+            try:
+                val_auc = float(roc_auc_score(vt, vp))
+            except Exception:
+                val_auc = np.nan
+            try:
+                val_ll = float(log_loss(vt, vp, labels=[0, 1]))
+            except Exception:
+                val_ll = np.nan
+            try:
+                val_bri = float(brier_score_loss(vt, vp))
+            except Exception:
+                val_bri = np.nan
         else:
             val_auc = val_ll = val_bri = np.nan
 
@@ -1872,11 +1883,15 @@ def run_models_o25(
     total_tasks = len(all_param_dicts)
     if base_model == "mlp":
         eff_jobs = min(max(1, cpu_jobs), 4)
-        prefer = "threads"; backend = "threading"; pre_dispatch = eff_jobs
+        prefer = "threads";
+        backend = "threading";
+        pre_dispatch = eff_jobs
         ctx = parallel_backend(backend, n_jobs=eff_jobs)
     else:
         eff_jobs = max(1, min(cpu_jobs, 4)) if cpu_jobs != -1 else 4
-        prefer = "processes"; backend = "loky"; pre_dispatch = f"{2*eff_jobs}"
+        prefer = "processes";
+        backend = "loky";
+        pre_dispatch = f"{2 * eff_jobs}"
         ctx = parallel_backend(backend, n_jobs=eff_jobs, inner_max_num_threads=1)
 
     with ctx:
@@ -1925,16 +1940,16 @@ def run_models_o25(
     qual = agg[
         (agg['val_precision'] >= float(precision_test_threshold)) &
         (agg['n_preds_val'] >= int(min_samples))
-    ].copy()
+        ].copy()
     if qual.empty:
         # nothing qualifies even on validation → treat as failure early
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if save_diagnostics_on_fail:
             fail_path = os.path.join(out_dir, f"model_metrics_{timestamp}_FAILED.csv")
-            (agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+            (agg.sort_values(['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
                              ascending=[False, False, False, False])
-                .assign(fail_reason="failed_validation_gate")
-                .to_csv(fail_path, index=False))
+             .assign(fail_reason="failed_validation_gate")
+             .to_csv(fail_path, index=False))
         msg = (f"No strategy met validation gates (precision ≥ {precision_test_threshold} "
                f"and n_preds_val ≥ {min_samples}).")
         if on_fail == "raise":
@@ -1946,7 +1961,7 @@ def run_models_o25(
             'csv': fail_path if save_diagnostics_on_fail else None,
             'model_pkl': None,
             'summary_df': None,
-            'validation_table': agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+            'validation_table': agg.sort_values(['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
                                                 ascending=[False, False, False, False]).reset_index(drop=True)
         }
 
@@ -1971,10 +1986,11 @@ def run_models_o25(
         })
 
     # Evaluate each Top-K candidate on TEST
-    records_all = []   # every candidate with test metrics + pass/fail reason
+    records_all = []  # every candidate with test metrics + pass/fail reason
     for cand in candidates:
         best_params = cast_params(cand['params'])
-        pos = int(y_train_final.sum()); neg = len(y_train_final) - pos
+        pos = int(y_train_final.sum());
+        neg = len(y_train_final) - pos
         spw_final = (neg / pos) if pos > 0 else 1.0
 
         final_model = build_model(best_params, spw_final)
@@ -2035,9 +2051,9 @@ def run_models_o25(
         if save_diagnostics_on_fail:
             diag = (survivors_df
                     .drop(columns=['model_obj'])
-                    .sort_values(by=['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                    .sort_values(by=['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
                                  ascending=[False, False, False, False])
-                   )
+                    )
             fail_csv = os.path.join(out_dir, f"model_metrics_{timestamp}_FAILED.csv")
             diag.to_csv(fail_csv, index=False)
         msg = (f"All Top-{len(candidates)} failed the TEST gate "
@@ -2062,7 +2078,8 @@ def run_models_o25(
 
     # Save PKL next to CSVs
     if market == 'OVER':
-        pkl_path = os.path.join(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Over_2_5\model_file", f"best_model_{tag}_calibrated_{timestamp}.pkl")
+        pkl_path = os.path.join(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Over_2_5\model_file",
+                                f"best_model_{tag}_calibrated_{timestamp}.pkl")
     else:
         pkl_path = os.path.join(r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\Under_2_5\model_file",
                                 f"best_model_{tag}_calibrated_{timestamp}.pkl")
@@ -2107,11 +2124,9 @@ def run_models_o25(
         'status': 'ok',
         'csv': csv_path,
         'model_pkl': pkl_path,
-        'summary_df': csv_df,           # passers only, with model_pkl set on row 0
-        'validation_table': ranked,     # full validation ranking (post-gates)
+        'summary_df': csv_df,  # passers only, with model_pkl set on row 0
+        'validation_table': ranked,  # full validation ranking (post-gates)
     }
-
-
 
 
 # ---- Simple ersatz rvs helpers (NumPy 2.x compatible) ----
@@ -2126,14 +2141,17 @@ def _as_rng(random_state):
     if random_state is None or isinstance(random_state, (int, np.integer)):
         return np.random.default_rng(None if random_state is None else int(random_state))
     # Fallback: hash arbitrary objects into a 32-bit seed
-    return np.random.default_rng(abs(hash(random_state)) % (2**32))
+    return np.random.default_rng(abs(hash(random_state)) % (2 ** 32))
+
 
 def _randint(low, high):
     class _R:
         def rvs(self, size=None, random_state=None):
             rng = _as_rng(random_state)
             return rng.integers(low, high, size=size)
+
     return _R()
+
 
 def _uniform(a, b):
     # draws from [a, a+b)
@@ -2141,7 +2159,9 @@ def _uniform(a, b):
         def rvs(self, size=None, random_state=None):
             rng = _as_rng(random_state)
             return rng.uniform(a, a + b, size=size)
+
     return _R()
+
 
 def _loguniform(a, b):
     # log-uniform on [a, b]
@@ -2150,8 +2170,8 @@ def _loguniform(a, b):
             rng = _as_rng(random_state)
             lo, hi = np.log(a), np.log(b)
             return np.exp(rng.uniform(lo, hi, size=size))
-    return _R()
 
+    return _R()
 
 
 def run_models_with_probs(data, features, filename_feature, min_samples=100, apply_calibration=True):
@@ -2354,23 +2374,24 @@ def running_ttest_p_profit(x):
     t_stat, p_two = stats.ttest_1samp(x, popmean=0, nan_policy='omit')
     return (p_two / 2) if (t_stat > 0) else (1 - p_two / 2)
 
+
 models_params = [
     (
         'XGBoost',
         XGBClassifier,
         {
             # Trees / learning‐rate trade‐off
-            'n_estimators':   [100, 300],
-            'learning_rate':  [0.05, 0.1],
+            'n_estimators': [100, 300],
+            'learning_rate': [0.05, 0.1],
             # Shallow vs moderate depth
-            'max_depth':      [3, 5],
+            'max_depth': [3, 5],
             # Row & column sampling
-            'subsample':      [0.8, 1.0],
+            'subsample': [0.8, 1.0],
             'colsample_bytree': [0.8],
             # Light regularisation
-            'gamma':          [0.0, 0.1],
-            'reg_alpha':      [0.0, 0.1],
-            'reg_lambda':     [1.0],
+            'gamma': [0.0, 0.1],
+            'reg_alpha': [0.0, 0.1],
+            'reg_lambda': [1.0],
             # for imbalanced data you can compute:
             # 'scale_pos_weight': [sum(neg)/sum(pos)]
         }
@@ -2382,15 +2403,688 @@ models_params = [
             # small vs medium single‐layer nets
             'hidden_layer_sizes': [(50,), (100,)],
             # L2 penalty
-            'alpha':           [1e-4, 1e-3, 1e-2],
+            'alpha': [1e-4, 1e-3, 1e-2],
             # fixed learning rate
             'learning_rate_init': [1e-3],
-            'max_iter':        [1000],
-            'early_stopping':  [True],
+            'max_iter': [1000],
+            'early_stopping': [True],
             # you get a 10%‐validation split for the stopping criterion by default
         }
     )
 ]
+
+
+def run_models_outcome(
+    matches_filtered: pd.DataFrame,
+    features: list,
+    min_samples: int = 200,            # validation gate: min predicted positives across folds
+    min_test_samples: int = 100,       # test gate: min predicted positives on hold-out test
+    precision_test_threshold: float = 0.80,
+    base_model: str = "xgb",           # "xgb" or "mlp"
+    search_mode: str = "random",       # "random" or "grid"
+    n_random_param_sets: int = 10,
+    cpu_jobs: int = 6,
+    top_k: int = 10,
+    thresholds: np.ndarray | None = None,
+    out_dir: str | None = None,        # if None, CSV saved to per-market metrics dir
+    # --- anti-overfitting knobs ---
+    val_conf_level: float = 0.99,      # Wilson-LCB confidence for validation precision
+    max_precision_drop: float = 0.05,  # allow at most 2pp drop val → test
+    # --- failure handling ---
+    on_fail: str = "return",           # "return" | "warn" | "raise"
+    save_diagnostics_on_fail: bool = True,
+    # --- market selection ---
+    market: str = "LAY_AWAY",          # LAY_HOME | LAY_AWAY | LAY_DRAW | BACK_HOME | BACK_AWAY | BACK_DRAW | (optional: OVER | UNDER)
+):
+    """
+    Rolling time-ordered CV (no leakage) with calibration and robust failure handling.
+
+    Target encoding (you must prepare df['target'] accordingly):
+      LAY_AWAY:  target=1 if AWAY does NOT win (H or D), else 0
+      LAY_HOME:  target=1 if HOME does NOT win (A or D), else 0
+      LAY_DRAW:  target=1 if NOT a draw (H or A), else 0
+
+      BACK_AWAY: target=1 if AWAY wins, else 0
+      BACK_HOME: target=1 if HOME wins, else 0
+      BACK_DRAW: target=1 if DRAW, else 0
+
+      (Optional)
+      OVER:      target=1 if goals > 2.5, else 0
+      UNDER:     target=1 if goals < 2.5, else 0
+    """
+    # ------------------ Imports & setup ------------------
+    import os, secrets, hashlib
+    from datetime import datetime
+    import numpy as np
+    import pandas as pd
+    from itertools import product
+    from math import sqrt
+    from sklearn.model_selection import ParameterSampler
+    from sklearn.metrics import precision_score, accuracy_score, roc_auc_score, log_loss, brier_score_loss
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.pipeline import Pipeline, make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.neural_network import MLPClassifier
+    from joblib import Parallel, delayed, parallel_backend
+    from tqdm import tqdm
+    from tqdm_joblib import tqdm_joblib
+    import joblib
+
+    # ---------- Fixed save locations per market ----------
+    BASE = r"C:\Users\leere\PycharmProjects\Football_ML3\FT Results"
+    PKL_DIRS = {
+        "LAY_HOME":  os.path.join(BASE, "Lay_Home",  "model_file"),
+        "LAY_AWAY":  os.path.join(BASE, "Lay_Away",  "model_file"),
+        "LAY_DRAW":  os.path.join(BASE, "Lay_Draw",  "model_file"),
+        "BACK_HOME": os.path.join(BASE, "Back_Home", "model_file"),
+        "BACK_AWAY": os.path.join(BASE, "Back_Away", "model_file"),
+        "BACK_DRAW": os.path.join(BASE, "Back_Draw", "model_file"),
+        # keep goals markets if you still use them
+        "OVER":      os.path.join(BASE, "Over_2_5",  "model_file"),
+        "UNDER":     os.path.join(BASE, "Under_2_5", "model_file"),
+    }
+    CSV_DIRS = {
+        "LAY_HOME":  os.path.join(BASE, "Lay_Home",  "best_model_metrics"),
+        "LAY_AWAY":  os.path.join(BASE, "Lay_Away",  "best_model_metrics"),
+        "LAY_DRAW":  os.path.join(BASE, "Lay_Draw",  "best_model_metrics"),
+        "BACK_HOME": os.path.join(BASE, "Back_Home", "best_model_metrics"),
+        "BACK_AWAY": os.path.join(BASE, "Back_Away", "best_model_metrics"),
+        "BACK_DRAW": os.path.join(BASE, "Back_Draw", "best_model_metrics"),
+        "OVER":      os.path.join(BASE, "Over_2_5",  "best_model_metrics"),
+        "UNDER":     os.path.join(BASE, "Under_2_5", "best_model_metrics"),
+    }
+    market = str(market).upper().strip()
+    if market not in PKL_DIRS or market not in CSV_DIRS:
+        raise ValueError(f"Unsupported market '{market}'. Use one of: {sorted(PKL_DIRS)}")
+
+    # xgboost (optional)
+    try:
+        import xgboost as xgb
+        _HAS_XGB_LOCAL = True
+    except Exception:
+        _HAS_XGB_LOCAL = False
+
+    # fallbacks for distributions if not defined at module scope
+    try:
+        _randint  # noqa: F821
+        _uniform  # noqa: F821
+        _loguniform  # noqa: F821
+    except NameError:
+        from scipy.stats import randint as _randint
+        from scipy.stats import uniform as _uniform
+        from scipy.stats import loguniform as _loguniform
+
+    # normal quantile for Wilson LCB
+    try:
+        from scipy.stats import norm
+        _Z = lambda conf: float(norm.ppf(1 - (1 - conf) / 2))
+    except Exception:
+        _Z = lambda conf: 1.96 if abs(conf - 0.95) < 1e-6 else 1.64  # crude fallback
+
+    def _wilson_lcb(tp: int, fp: int, conf: float) -> float:
+        n = tp + fp
+        if n <= 0:
+            return 0.0
+        p = tp / n
+        z = _Z(conf)
+        denom = 1.0 + (z*z)/n
+        centre = p + (z*z)/(2*n)
+        rad = z * sqrt((p*(1-p)/n) + (z*z)/(4*n*n))
+        return max(0.0, (centre - rad) / denom)
+
+    if thresholds is None:
+        thresholds = np.round(np.arange(0.10, 0.91, 0.01), 2)
+
+    # CSV save dir defaults to per-market folder unless out_dir explicitly provided
+    csv_save_dir = out_dir if (out_dir is not None and len(str(out_dir)) > 0) else CSV_DIRS[market]
+    os.makedirs(csv_save_dir, exist_ok=True)
+    model_dir = PKL_DIRS[market]
+    os.makedirs(model_dir, exist_ok=True)
+
+    # honour external _HAS_XGB if present, else use local probe
+    _HAS_XGB = globals().get("_HAS_XGB", _HAS_XGB_LOCAL)
+    if base_model == "xgb" and not _HAS_XGB:
+        raise ImportError("XGBoost not available; set base_model='mlp' or install xgboost.")
+
+    # Fresh run seed → different every invocation
+    RUN_SEED = secrets.randbits(32)
+
+    def _seed_from(*vals) -> int:
+        """Derive a stable (within-run) 31-bit positive seed from RUN_SEED and provided values."""
+        h = hashlib.blake2b(digest_size=8)
+        h.update(int(RUN_SEED).to_bytes(8, 'little', signed=False))
+        for v in vals:
+            h.update(str(v).encode('utf-8'))
+        return int.from_bytes(h.digest(), 'little') & 0x7FFFFFFF
+
+    # ------------------ Data prep ------------------
+    req_cols = {'date', 'target'}
+    missing = req_cols - set(matches_filtered.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    df = matches_filtered.copy()
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.sort_values('date').reset_index(drop=True)
+
+    cols_needed = list(set(features) | {'target'})
+    df = df.dropna(subset=cols_needed).reset_index(drop=True)
+
+    X = df[features].copy()
+    y = df['target'].astype(int).reset_index(drop=True)
+
+    n = len(X)
+    if n < max(min_samples * 3, 500):
+        raise RuntimeError(f"Not enough rows: {n}")
+
+    # ------------------ Temporal split ------------------
+    test_start = int(0.85 * n)
+    pretest_end = test_start
+
+    X_test = X.iloc[test_start:].reset_index(drop=True)
+    y_test = y.iloc[test_start:].reset_index(drop=True)
+
+    # Rolling folds inside [0, pretest_end)
+    N_FOLDS = 5
+    total_val_len = max(1, int(0.15 * n))
+    val_len = max(1, total_val_len // N_FOLDS)
+    fold_val_ends = [pretest_end - total_val_len + (i + 1) * val_len for i in range(N_FOLDS)]
+    fold_val_starts = [end - val_len for end in fold_val_ends]
+    if fold_val_ends:
+        fold_val_ends[-1] = min(fold_val_ends[-1], pretest_end)
+        fold_val_starts[-1] = max(0, fold_val_ends[-1] - val_len)
+
+    # Final small validation slice (for calibration before test)
+    final_val_len = max(1, val_len)
+    final_val_start = max(0, test_start - final_val_len)
+    X_train_final = X.iloc[:final_val_start]
+    y_train_final = y.iloc[:final_val_start]
+    X_val_final   = X.iloc[final_val_start:test_start]
+    y_val_final   = y.iloc[final_val_start:test_start]
+
+    # ------------------ Hyper-parameter spaces ------------------
+    xgb_param_grid = {
+        'n_estimators':      [200],
+        'max_depth':         [5],
+        'learning_rate':     [0.1],
+        'subsample':         [0.7],
+        'colsample_bytree':  [1.0],
+        'min_child_weight':  [5],
+        'reg_lambda':        [1.0],
+    }
+    xgb_param_distributions = {
+        'n_estimators':      _randint(100, 1001),
+        'max_depth':         _randint(3, 8),
+        'learning_rate':     _loguniform(0.01, 0.2),
+        'min_child_weight':  _randint(3, 13),
+        'subsample':         _uniform(0.7, 0.3),
+        'colsample_bytree':  _uniform(0.6, 0.4),
+        'reg_lambda':        _loguniform(0.1, 10.0),
+    }
+    mlp_param_grid = {
+        'hidden_layer_sizes': [(128,), (256,), (128, 64)],
+        'alpha':              [1e-4],
+        'learning_rate_init': [1e-3],
+        'batch_size':         ['auto'],
+        'max_iter':           [200],
+    }
+    mlp_param_distributions = {
+        'hidden_layer_sizes': [(64,), (128,), (256,), (128, 64), (256, 128)],
+        'alpha':              _loguniform(1e-5, 1e-2),
+        'learning_rate_init': _loguniform(5e-4, 5e-2),
+        'batch_size':         _randint(32, 257),
+        'max_iter':           _randint(150, 401),
+    }
+
+    if search_mode.lower() == "grid":
+        grid = xgb_param_grid if base_model == "xgb" else mlp_param_grid
+        all_param_dicts = [dict(zip(grid.keys(), combo)) for combo in product(*grid.values())]
+    else:
+        dists = xgb_param_distributions if base_model == "xgb" else mlp_param_distributions
+        sampler_seed = _seed_from("sampler")
+        all_param_dicts = list(ParameterSampler(dists, n_iter=n_random_param_sets, random_state=sampler_seed))
+
+    # ------------------ Helpers ------------------
+    def cast_params(p: dict) -> dict:
+        q = dict(p)
+        if base_model == "xgb":
+            for k in ['n_estimators', 'max_depth', 'min_child_weight']:
+                if k in q: q[k] = int(q[k])
+            for k in ['learning_rate', 'subsample', 'colsample_bytree', 'reg_lambda']:
+                if k in q: q[k] = float(q[k])
+        else:
+            if 'max_iter' in q: q['max_iter'] = int(q['max_iter'])
+            if 'batch_size' in q and q['batch_size'] != 'auto':
+                q['batch_size'] = int(q['batch_size'])
+            if 'alpha' in q: q['alpha'] = float(q['alpha'])
+            if 'learning_rate_init' in q: q['learning_rate_init'] = float(q['learning_rate_init'])
+            if 'hidden_layer_sizes' in q:
+                h = q['hidden_layer_sizes']
+                q['hidden_layer_sizes'] = tuple(h) if not isinstance(h, tuple) else h
+        return q
+
+    def _final_step_name(estimator):
+        try:
+            if isinstance(estimator, Pipeline):
+                return estimator.steps[-1][0]
+        except Exception:
+            pass
+        return None
+
+    def build_model(params: dict, spw: float):
+        model_seed = _seed_from("model", base_model, tuple(sorted(params.items())))
+        if base_model == "xgb":
+            return xgb.XGBClassifier(
+                objective='binary:logistic',
+                eval_metric='auc',
+                random_state=model_seed,
+                scale_pos_weight=spw,
+                n_jobs=1,
+                tree_method="hist",
+                verbosity=0,
+                **params
+            )
+        else:
+            mlp = MLPClassifier(
+                random_state=model_seed,
+                early_stopping=True,
+                n_iter_no_change=20,
+                validation_fraction=0.1,
+                solver="adam",
+                **params
+            )
+            return make_pipeline(StandardScaler(with_mean=True, with_std=True), mlp)
+
+    def fit_model(model, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None):
+        if base_model == "xgb":
+            try:
+                model.set_params(verbosity=0, early_stopping_rounds=50)
+                if X_va is not None and y_va is not None:
+                    model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
+                else:
+                    model.fit(X_tr, y_tr, verbose=False)
+            except Exception:
+                model.fit(X_tr, y_tr, verbose=False)
+        else:
+            fit_kwargs = {}
+            if sample_weight is not None:
+                stepname = _final_step_name(model)
+                if stepname is not None:
+                    fit_kwargs[f"{stepname}__sample_weight"] = sample_weight
+            try:
+                model.fit(X_tr, y_tr, **fit_kwargs)
+            except TypeError:
+                model.fit(X_tr, y_tr)
+
+    def fit_calibrator(fitted, X_va, y_va):
+        try:
+            from sklearn.calibration import FrozenEstimator
+            frozen = FrozenEstimator(fitted)
+            cal = CalibratedClassifierCV(frozen, method='sigmoid', cv=None)
+            cal.fit(X_va, y_va)
+            return cal
+        except Exception:
+            try:
+                cal = CalibratedClassifierCV(fitted, method='sigmoid', cv='prefit')
+                cal.fit(X_va, y_va)
+                return cal
+            except Exception:
+                return fitted
+
+    # --- robust proba extraction (handles single-class fits) ---
+    def _unwrap_estimator(est):
+        if isinstance(est, Pipeline):
+            return est.steps[-1][1]
+        return est
+
+    def predict_proba_1(model_or_cal, X_):
+        proba = model_or_cal.predict_proba(X_)
+        if proba.ndim == 2:
+            n_classes = proba.shape[1]
+            # try to locate column for class '1'
+            pos_idx = None
+            classes = getattr(model_or_cal, "classes_", None)
+            if classes is None:
+                base = _unwrap_estimator(model_or_cal)
+                classes = getattr(base, "classes_", None)
+            if classes is not None:
+                try:
+                    idxs = np.where(np.asarray(classes) == 1)[0]
+                    if len(idxs):
+                        pos_idx = int(idxs[0])
+                except Exception:
+                    pos_idx = None
+            if n_classes == 2 and pos_idx is not None:
+                return proba[:, pos_idx].astype(np.float32)
+            if n_classes == 1:
+                only = None
+                if classes is not None and len(classes) == 1:
+                    only = int(classes[0])
+                return (np.ones(proba.shape[0], dtype=np.float32)
+                        if only == 1 else
+                        np.zeros(proba.shape[0], dtype=np.float32))
+            return proba[:, min(1, n_classes - 1)].astype(np.float32)
+        return np.asarray(proba, dtype=np.float32)
+
+    # ------------------ Rolling-CV evaluator (VALIDATION) ------------------
+    def evaluate_param_set(param_dict, task_id=None, total_tasks=None):
+        safe = cast_params(param_dict)
+        rows = []
+        val_prob_all, val_true_all = [], []
+
+        for vstart, vend in zip(fold_val_starts, fold_val_ends):
+            if vstart is None or vend is None or vstart <= 0 or vend <= vstart:
+                continue
+
+            X_tr, y_tr = X.iloc[:vstart], y.iloc[:vstart]
+            X_va, y_va = X.iloc[vstart:vend], y.iloc[vstart:vend]
+
+            # Skip this fold if training slice is single-class
+            if y_tr.nunique() < 2:
+                continue
+
+            pos = int(y_tr.sum()); neg = len(y_tr) - pos
+            spw = (neg / pos) if pos > 0 else 1.0
+
+            sample_weight = None
+            if base_model == "mlp":
+                w_pos = spw
+                sample_weight = np.where(y_tr.values == 1, w_pos, 1.0).astype(np.float32)
+
+            model = build_model(safe, spw)
+            fit_model(model, X_tr, y_tr, X_va, y_va, sample_weight=sample_weight)
+
+            cal = fit_calibrator(model, X_va, y_va)
+            proba_va = predict_proba_1(cal, X_va)
+
+            val_prob_all.append(proba_va)
+            y_true = y_va.values.astype(np.uint8)
+            val_true_all.append(y_true)
+
+            for thr in thresholds:
+                y_pred = (proba_va >= thr).astype(np.uint8)
+                n_preds = int(y_pred.sum())
+                tp = int(((y_true == 1) & (y_pred == 1)).sum())
+                fp = int(((y_true == 0) & (y_pred == 1)).sum())
+                prc = precision_score(y_va, y_pred, zero_division=0)
+                acc = accuracy_score(y_va, y_pred)
+
+                rows.append({
+                    **safe,
+                    'threshold': float(thr),
+                    'fold_vstart': int(vstart),
+                    'fold_vend': int(vend),
+                    'n_preds_val': n_preds,
+                    'tp_val': tp,
+                    'fp_val': fp,
+                    'val_precision': float(prc),
+                    'val_accuracy': float(acc),
+                })
+
+        # pooled diagnostics
+        if val_prob_all:
+            vp = np.concatenate(val_prob_all, axis=0)
+            vt = np.concatenate(val_true_all, axis=0)
+            try: val_auc = float(roc_auc_score(vt, vp))
+            except Exception: val_auc = np.nan
+            try: val_ll  = float(log_loss(vt, vp, labels=[0, 1]))
+            except Exception: val_ll  = np.nan
+            try: val_bri = float(brier_score_loss(vt, vp))
+            except Exception: val_bri = np.nan
+        else:
+            val_auc = val_ll = val_bri = np.nan
+
+        for r in rows:
+            r['val_auc'] = val_auc
+            r['val_logloss'] = val_ll
+            r['val_brier'] = val_bri
+
+        return rows
+
+    # ------------------ Parallel parameter search ------------------
+    total_tasks = len(all_param_dicts)
+    if base_model == "mlp":
+        eff_jobs = min(max(1, cpu_jobs), 4)
+        prefer = "threads"; backend = "threading"; pre_dispatch = eff_jobs
+        ctx = parallel_backend(backend, n_jobs=eff_jobs)
+    else:
+        eff_jobs = max(1, min(cpu_jobs, 4)) if cpu_jobs != -1 else 4
+        prefer = "processes"; backend = "loky"; pre_dispatch = f"{2*eff_jobs}"
+        ctx = parallel_backend(backend, n_jobs=eff_jobs, inner_max_num_threads=1)
+
+    with ctx:
+        try:
+            with tqdm_joblib(tqdm(total=total_tasks, desc=f"Param search ({search_mode}, {base_model})")) as _:
+                out = Parallel(
+                    n_jobs=eff_jobs, batch_size=1, prefer=prefer, pre_dispatch=pre_dispatch
+                )(
+                    delayed(evaluate_param_set)(pd_, i, total_tasks)
+                    for i, pd_ in enumerate(all_param_dicts)
+                )
+        except OSError as e:
+            print(f"[WARN] Parallel failed with {e}. Falling back to serial search...")
+            out = []
+            for i, pd_ in enumerate(tqdm(all_param_dicts, desc=f"Param search (serial, {base_model})")):
+                out.append(evaluate_param_set(pd_, i, total_tasks))
+
+    val_rows = [r for sub in out for r in sub]
+    if not val_rows:
+        raise RuntimeError("No validation rows produced (check folds and input data).")
+    val_df = pd.DataFrame(val_rows)
+
+    # ------------------ Aggregate across folds (VALIDATION) ------------------
+    if base_model == "xgb":
+        param_keys = ['n_estimators','max_depth','learning_rate','subsample','colsample_bytree','min_child_weight','reg_lambda']
+    else:
+        param_keys = ['hidden_layer_sizes','alpha','learning_rate_init','batch_size','max_iter']
+
+    group_cols = param_keys + ['threshold']
+    agg = val_df.groupby(group_cols, as_index=False).agg({
+        'n_preds_val': 'sum',
+        'tp_val': 'sum',
+        'fp_val': 'sum',
+        'val_precision': 'mean',
+        'val_accuracy': 'mean',
+        'val_auc': 'mean',
+        'val_logloss': 'mean',
+        'val_brier': 'mean',
+    })
+
+    # Wilson-LCB & pooled precision
+    agg['val_precision_pooled'] = agg.apply(
+        lambda r: (r['tp_val'] / max(1, (r['tp_val'] + r['fp_val']))), axis=1
+    )
+    agg['val_precision_lcb'] = agg.apply(
+        lambda r: _wilson_lcb(int(r['tp_val']), int(r['fp_val']), conf=val_conf_level), axis=1
+    )
+
+    # Validation gates
+    qual = agg[
+        (agg['val_precision'] >= float(precision_test_threshold)) &
+        (agg['n_preds_val'] >= int(min_samples))
+    ].copy()
+
+    if qual.empty:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fail_csv = None
+        if save_diagnostics_on_fail:
+            diag = (agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                                    ascending=[False, False, False, False])
+                    .assign(fail_reason="failed_validation_gate", market=market))
+            fail_csv = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}_FAILED.csv")
+            os.makedirs(csv_save_dir, exist_ok=True)
+            diag.to_csv(fail_csv, index=False)
+        msg = (f"No strategy met validation gates (precision ≥ {precision_test_threshold} "
+               f"and n_preds_val ≥ {min_samples}).")
+        if on_fail == "raise":
+            raise RuntimeError(msg)
+        if on_fail == "warn":
+            print("[WARN]", msg)
+        return {
+            'status': 'failed_validation_gate',
+            'csv': fail_csv,
+            'model_pkl': None,
+            'summary_df': None,
+            'validation_table': agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                                                ascending=[False, False, False, False]).reset_index(drop=True)
+        }
+
+    ranked = qual.sort_values(
+        by=['val_precision_lcb', 'val_precision', 'n_preds_val', 'val_accuracy'],
+        ascending=[False, False, False, False]
+    ).reset_index(drop=True)
+
+    topk_val = ranked.head(top_k).reset_index(drop=True)
+
+    # ------------------ Evaluate ALL Top-K on TEST ------------------
+    candidates = []
+    for _, row in topk_val.iterrows():
+        candidates.append({
+            'params': {k: row[k] for k in param_keys if k in row.index},
+            'threshold': float(row['threshold']),
+            'val_precision': float(row['val_precision']),
+            'val_precision_lcb': float(row['val_precision_lcb']),
+            'val_accuracy': float(row['val_accuracy']),
+            'n_preds_val': int(row['n_preds_val']),
+        })
+
+    records_all = []
+    for cand in candidates:
+        best_params = cast_params(cand['params'])
+        pos = int(y_train_final.sum()); neg = len(y_train_final) - pos
+        spw_final = (neg / pos) if pos > 0 else 1.0
+
+        final_model = build_model(best_params, spw_final)
+        final_sample_weight = None
+        if base_model == "mlp":
+            w_pos = spw_final
+            final_sample_weight = np.where(y_train_final.values == 1, w_pos, 1.0).astype(np.float32)
+
+        fit_model(final_model, X_train_final, y_train_final, X_val_final, y_val_final,
+                  sample_weight=final_sample_weight)
+        final_calibrator = fit_calibrator(final_model, X_val_final, y_val_final)
+
+        y_test_proba = predict_proba_1(final_calibrator, X_test)
+        thr = cand['threshold']
+        y_pred = (y_test_proba >= thr).astype(np.uint8)
+        n_preds_test = int(y_pred.sum())
+        prc_test = precision_score(y_test, y_pred, zero_division=0)
+        acc_test = accuracy_score(y_test, y_pred)
+
+        enough = n_preds_test >= int(min_test_samples)
+        not_collapsed = prc_test >= max(float(precision_test_threshold),
+                                        float(cand['val_precision']) - float(max_precision_drop))
+        pass_gate = bool(enough and not_collapsed)
+        reason = ""
+        if not pass_gate:
+            if not enough and not not_collapsed:
+                reason = "insufficient_test_preds_and_precision_collapse"
+            elif not enough:
+                reason = "insufficient_test_preds"
+            else:
+                reason = "precision_collapse"
+
+        records_all.append({
+            **cand['params'],
+            'threshold': thr,
+            'val_precision_lcb': cand['val_precision_lcb'],
+            'val_precision': cand['val_precision'],
+            'val_accuracy': cand['val_accuracy'],
+            'n_preds_val': cand['n_preds_val'],
+            'n_preds_test': n_preds_test,
+            'test_precision': float(prc_test),
+            'test_accuracy': float(acc_test),
+            'pass_test_gate': pass_gate,
+            'fail_reason': reason,
+            'model_obj': final_calibrator if pass_gate else None,
+        })
+
+    survivors_df = pd.DataFrame(records_all)
+    passers = survivors_df[survivors_df['pass_test_gate']].copy()
+
+    # ------------------ Persist outputs ------------------
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = "xgb" if base_model == "xgb" else "mlp"
+
+    if passers.empty:
+        fail_csv = None
+        if save_diagnostics_on_fail:
+            diag = (survivors_df
+                    .drop(columns=['model_obj'])
+                    .sort_values(by=['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+                                 ascending=[False, False, False, False])
+                    .assign(market=market))
+            fail_csv = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}_FAILED.csv")
+            diag.to_csv(fail_csv, index=False)
+            summary_df = diag
+        else:
+            summary_df = survivors_df.drop(columns=['model_obj'])
+        msg = (f"All Top-{len(candidates)} failed the TEST gate "
+               f"(n_preds_test ≥ {int(min_test_samples)} and precision not collapsing).")
+        if on_fail == "raise":
+            raise RuntimeError(msg)
+        if on_fail == "warn":
+            print("[WARN]", msg)
+        return {
+            'status': 'failed_test_gate',
+            'csv': fail_csv,
+            'model_pkl': None,
+            'summary_df': summary_df,
+            'validation_table': ranked,
+        }
+
+    passers_sorted = passers.sort_values(
+        by=['val_precision_lcb', 'val_precision', 'test_precision', 'n_preds_test', 'val_accuracy'],
+        ascending=[False, False, False, False, False]
+    ).reset_index(drop=True)
+
+    # Save PKL
+    pkl_path = os.path.join(model_dir, f"best_model_{market}_{tag}_calibrated_{timestamp}.pkl")
+    # Prepare CSV (include PKL for top row)
+    csv_df = passers_sorted.drop(columns=['model_obj']).copy()
+    csv_df['model_pkl'] = ""
+    csv_df.loc[0, 'model_pkl'] = pkl_path
+    csv_df['market'] = market
+    csv_path = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}.csv")
+    csv_df.to_csv(csv_path, index=False)
+
+    # Save the model PKL for the top row
+    top_row = passers_sorted.iloc[0]
+    chosen_model = top_row['model_obj']
+    chosen_params = {k: top_row[k] for k in param_keys if k in passers_sorted.columns}
+    chosen_threshold = float(top_row['threshold'])
+
+    joblib.dump(
+        {
+            'model': chosen_model,
+            'threshold': chosen_threshold,
+            'features': features,
+            'base_model': base_model,
+            'best_params': chosen_params,
+            'precision_test_threshold': float(precision_test_threshold),
+            'min_samples': int(min_samples),
+            'min_test_samples': int(min_test_samples),
+            'val_conf_level': float(val_conf_level),
+            'max_precision_drop': float(max_precision_drop),
+            'market': market,
+            'notes': (
+                'CSV includes only candidates passing test gate; ranked by '
+                'val_precision_lcb → val_precision → test_precision → n_preds_test → val_accuracy. '
+                'Seeds are random each run.'
+            ),
+            'run_seed': int(RUN_SEED),
+        },
+        pkl_path
+    )
+
+    return {
+        'status': 'ok',
+        'csv': csv_path,
+        'model_pkl': pkl_path,
+        'summary_df': csv_df,           # passers only, with model_pkl on row 0
+        'validation_table': ranked,     # full validation ranking (post-gates)
+    }
+
 
 # Main function
 
@@ -2531,7 +3225,7 @@ def run_value_betting(data,
 
             # collect if valid
             if all(v is not None for v in [n_train, n_test, train_profit, test_profit]) \
-               and n_train >= min_bets and n_test >= min_bets and test_profit > 0:
+                    and n_train >= min_bets and n_test >= min_bets and test_profit > 0:
                 all_results.append({
                     'model_name': name,
                     'num_bets_train': n_train,
@@ -2559,25 +3253,21 @@ def run_value_betting(data,
     print(f"Saved top-100 to {csv}")
     return top100
 
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split, ParameterGrid
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import roc_auc_score, precision_score
+
+
+
 
 # Assumes running_ttest_p_profit is defined elsewhere
 def run_models_with_probs_v2(
-    data,
-    features,
-    models_params=models_params,
-    thresholds=np.arange(0.1, 0.9, 0.1),
-    test_size=0.2,
-    random_state=42,
-    apply_calibration=True,
-    min_samples=25,
-    filename_feature='model_probs'
+        data,
+        features,
+        models_params=models_params,
+        thresholds=np.arange(0.1, 0.9, 0.1),
+        test_size=0.2,
+        random_state=42,
+        apply_calibration=True,
+        min_samples=25,
+        filename_feature='model_probs'
 ):
     """
     1. Splits `data` into train/test by `test_size` (default 80/20).
@@ -2747,6 +3437,7 @@ def run_models_with_probs_v2(
         print("No runs with positive P/L on both train and test; CSV not saved.")
     return df
 
+
 def run_models_with_probs_v3(
         data,
         features,
@@ -2758,225 +3449,220 @@ def run_models_with_probs_v3(
         min_samples=25,
         filename_feature='model_probs'
 ):
-        """
-        1. Splits `data` into train/test by `test_size` (default 80/20).
-        2. For each model/parameter combination:
-           - Trains model (with optional calibration) on train set (uses eval_set if early_stopping_rounds passed for XGBoost).
-           - Predicts probabilities on both train and test sets.
-           - For each threshold, computes:
-             * Number of bets
-             * AUC, Precision
-             * Profit/Loss using `over_25_odds`
-             * ROI, P-value
-             * Precision ratio (test/train)
-           - If BOTH train and test P/L > 0, runs model on full data and computes overall Bets, P/L, ROI, P-value.
-             * Prints overall metrics with threshold included.
-        3. Aggregates runs into DataFrame, ensures full-data columns exist.
-        4. Saves CSV only if at least one run has both `pl_train>0` and `pl_test>0`.
-        """
-        models_params = [
-            (
-                'XGBoost',
-                XGBClassifier,
-                {
-                    'n_estimators': [100, 300, 500],
-                    'learning_rate': [0.05, 0.1],
-                    'max_depth': [3, 5, 7],
-                    'subsample': [0.8, 1.0],
-                    'colsample_bytree': [0.8, 1.0],
-                    'gamma': [0.0, 0.1],
-                    'reg_alpha': [0.0, 0.1],
-                    'reg_lambda': [1.0, 2.0],
-                    'scale_pos_weight': [1, (data['target'] == 0).sum() / (data['target'] == 1).sum()],
-                    #'early_stopping_rounds': [50]
-                }
-            ),
-            (
-                'MLP',
-                MLPClassifier,
-                {
-                    'hidden_layer_sizes': [(100,), (100, 50), (100, 50, 25)],
-                    'alpha': [1e-4, 1e-3, 1e-2],
-                    'learning_rate_init': [1e-3],
-                    'max_iter': [1000],
-                    'early_stopping': [True],
-                    'validation_fraction': [0.1],
-                    'n_iter_no_change': [20]
-                }
-            )
-        ]
-        # Split data
-        train_data, test_data = train_test_split(
-            data, test_size=test_size, random_state=random_state
+    """
+    1. Splits `data` into train/test by `test_size` (default 80/20).
+    2. For each model/parameter combination:
+       - Trains model (with optional calibration) on train set (uses eval_set if early_stopping_rounds passed for XGBoost).
+       - Predicts probabilities on both train and test sets.
+       - For each threshold, computes:
+         * Number of bets
+         * AUC, Precision
+         * Profit/Loss using `over_25_odds`
+         * ROI, P-value
+         * Precision ratio (test/train)
+       - If BOTH train and test P/L > 0, runs model on full data and computes overall Bets, P/L, ROI, P-value.
+         * Prints overall metrics with threshold included.
+    3. Aggregates runs into DataFrame, ensures full-data columns exist.
+    4. Saves CSV only if at least one run has both `pl_train>0` and `pl_test>0`.
+    """
+    models_params = [
+        (
+            'XGBoost',
+            XGBClassifier,
+            {
+                'n_estimators': [100, 300, 500],
+                'learning_rate': [0.05, 0.1],
+                'max_depth': [3, 5, 7],
+                'subsample': [0.8, 1.0],
+                'colsample_bytree': [0.8, 1.0],
+                'gamma': [0.0, 0.1],
+                'reg_alpha': [0.0, 0.1],
+                'reg_lambda': [1.0, 2.0],
+                'scale_pos_weight': [1, (data['target'] == 0).sum() / (data['target'] == 1).sum()],
+                # 'early_stopping_rounds': [50]
+            }
+        ),
+        (
+            'MLP',
+            MLPClassifier,
+            {
+                'hidden_layer_sizes': [(100,), (100, 50), (100, 50, 25)],
+                'alpha': [1e-4, 1e-3, 1e-2],
+                'learning_rate_init': [1e-3],
+                'max_iter': [1000],
+                'early_stopping': [True],
+                'validation_fraction': [0.1],
+                'n_iter_no_change': [20]
+            }
         )
-        X_tr, y_tr = train_data[features], train_data['target']
-        X_te, y_te = test_data[features], test_data['target']
+    ]
+    # Split data
+    train_data, test_data = train_test_split(
+        data, test_size=test_size, random_state=random_state
+    )
+    X_tr, y_tr = train_data[features], train_data['target']
+    X_te, y_te = test_data[features], test_data['target']
 
-        odds_tr = train_data['over_25_odds'].values
-        odds_te = test_data['over_25_odds'].values
-        odds_full = data['over_25_odds'].values
+    odds_tr = train_data['over_25_odds'].values
+    odds_te = test_data['over_25_odds'].values
+    odds_full = data['over_25_odds'].values
 
-        all_metrics = []
-        total_runs = sum(len(list(ParameterGrid(grid))) for _, _, grid in models_params)
-        run_count = 0
+    all_metrics = []
+    total_runs = sum(len(list(ParameterGrid(grid))) for _, _, grid in models_params)
+    run_count = 0
 
-        for name, ModelClass, grid in models_params:
-            for params in ParameterGrid(grid):
-                run_count += 1
-                print(f"\n=== Run {run_count}/{total_runs}: {name} | params={params} ===")
+    for name, ModelClass, grid in models_params:
+        for params in ParameterGrid(grid):
+            run_count += 1
+            print(f"\n=== Run {run_count}/{total_runs}: {name} | params={params} ===")
 
-                # Copy and extract early stopping for XGB
-                params_copy = params.copy()
-                es_rounds = params_copy.pop('early_stopping_rounds', None)
+            # Copy and extract early stopping for XGB
+            params_copy = params.copy()
+            es_rounds = params_copy.pop('early_stopping_rounds', None)
 
-                # Instantiate model
-                model = ModelClass(**params_copy)
-                if hasattr(model, 'random_state'):
-                    model.set_params(random_state=random_state)
+            # Instantiate model
+            model = ModelClass(**params_copy)
+            if hasattr(model, 'random_state'):
+                model.set_params(random_state=random_state)
 
-                pipe = Pipeline([('scaler', StandardScaler()), ('model', model)])
+            pipe = Pipeline([('scaler', StandardScaler()), ('model', model)])
 
-                # Fit with early stopping if XGB
-                if isinstance(model, XGBClassifier) and es_rounds is not None:
-                    pipe.fit(
-                        X_tr, y_tr,
-                        model__eval_set=[(X_te, y_te)],
-                        model__early_stopping_rounds=es_rounds,
-                        model__verbose=False
-                    )
-                else:
-                    pipe.fit(X_tr, y_tr)
+            # Fit with early stopping if XGB
+            if isinstance(model, XGBClassifier) and es_rounds is not None:
+                pipe.fit(
+                    X_tr, y_tr,
+                    model__eval_set=[(X_te, y_te)],
+                    model__early_stopping_rounds=es_rounds,
+                    model__verbose=False
+                )
+            else:
+                pipe.fit(X_tr, y_tr)
 
-                # Calibration
-                if apply_calibration:
-                    clf = CalibratedClassifierCV(pipe, method='sigmoid', cv='prefit')
-                    clf.fit(X_tr, y_tr)
-                else:
-                    clf = pipe
+            # Calibration
+            if apply_calibration:
+                clf = CalibratedClassifierCV(pipe, method='sigmoid', cv='prefit')
+                clf.fit(X_tr, y_tr)
+            else:
+                clf = pipe
 
-                # Predict probabilities
-                prob_tr = clf.predict_proba(X_tr)[:, 1]
-                prob_te = clf.predict_proba(X_te)[:, 1]
+            # Predict probabilities
+            prob_tr = clf.predict_proba(X_tr)[:, 1]
+            prob_te = clf.predict_proba(X_te)[:, 1]
 
-                # Compute AUCs
-                auc_tr = roc_auc_score(y_tr, prob_tr)
-                auc_te = roc_auc_score(y_te, prob_te)
+            # Compute AUCs
+            auc_tr = roc_auc_score(y_tr, prob_tr)
+            auc_te = roc_auc_score(y_te, prob_te)
 
-                # Loop thresholds
-                for t in thresholds:
-                    mask_tr = prob_tr >= t
-                    mask_te = prob_te >= t
-                    n_tr = int(mask_tr.sum())
-                    n_te = int(mask_te.sum())
+            # Loop thresholds
+            for t in thresholds:
+                mask_tr = prob_tr >= t
+                mask_te = prob_te >= t
+                n_tr = int(mask_tr.sum())
+                n_te = int(mask_te.sum())
 
-                    if n_tr < min_samples or n_te < min_samples:
-                        continue
+                if n_tr < min_samples or n_te < min_samples:
+                    continue
 
-                    prec_tr = precision_score(y_tr, mask_tr)
-                    prec_te = precision_score(y_te, mask_te)
+                prec_tr = precision_score(y_tr, mask_tr)
+                prec_te = precision_score(y_te, mask_te)
 
-                    profits_tr = np.where(
-                        mask_tr & (y_tr.values == 1), odds_tr - 1,
-                        np.where(mask_tr, -1, 0)
-                    )
-                    profits_te = np.where(
-                        mask_te & (y_te.values == 1), odds_te - 1,
-                        np.where(mask_te, -1, 0)
-                    )
+                profits_tr = np.where(
+                    mask_tr & (y_tr.values == 1), odds_tr - 1,
+                    np.where(mask_tr, -1, 0)
+                )
+                profits_te = np.where(
+                    mask_te & (y_te.values == 1), odds_te - 1,
+                    np.where(mask_te, -1, 0)
+                )
 
-                    total_pl_tr = profits_tr.sum()
-                    total_pl_te = profits_te.sum()
+                total_pl_tr = profits_tr.sum()
+                total_pl_te = profits_te.sum()
 
-                    roi_tr = total_pl_tr / n_tr
-                    roi_te = total_pl_te / n_te
+                roi_tr = total_pl_tr / n_tr
+                roi_te = total_pl_te / n_te
 
-                    pval_tr = running_ttest_p_profit(profits_tr[mask_tr].tolist())
-                    pval_te = running_ttest_p_profit(profits_te[mask_te].tolist())
+                pval_tr = running_ttest_p_profit(profits_tr[mask_tr].tolist())
+                pval_te = running_ttest_p_profit(profits_te[mask_te].tolist())
 
-                    ratio = prec_te / (prec_tr + 1e-10)
+                ratio = prec_te / (prec_tr + 1e-10)
 
-                    # Print train/test metrics
-                    print(
-                        f"Threshold {t:.2f} | "
-                        f"Train: bets={n_tr}, auc={auc_tr:.3f}, prec={prec_tr:.3f}, pl={total_pl_tr:.2f}, roi={roi_tr:.3f}, pval={pval_tr:.3f} | "
-                        f"Test:  bets={n_te}, auc={auc_te:.3f}, prec={prec_te:.3f}, pl={total_pl_te:.2f}, roi={roi_te:.3f}, pval={pval_te:.3f} | "
-                        f"Ratio: {ratio:.3f}"
-                    )
+                # Print train/test metrics
+                print(
+                    f"Threshold {t:.2f} | "
+                    f"Train: bets={n_tr}, auc={auc_tr:.3f}, prec={prec_tr:.3f}, pl={total_pl_tr:.2f}, roi={roi_tr:.3f}, pval={pval_tr:.3f} | "
+                    f"Test:  bets={n_te}, auc={auc_te:.3f}, prec={prec_te:.3f}, pl={total_pl_te:.2f}, roi={roi_te:.3f}, pval={pval_te:.3f} | "
+                    f"Ratio: {ratio:.3f}"
+                )
 
-                    # Prepare record
-                    rec = {
-                        'model': name,
-                        'params': params_copy,
-                        'threshold': t,
-                        'bets_train': n_tr,
-                        'auc_train': round(auc_tr, 4),
-                        'prec_train': round(prec_tr, 4),
-                        'pl_train': round(total_pl_tr, 2),
-                        'roi_train': round(roi_tr, 4),
-                        'pval_train': round(pval_tr, 4),
-                        'bets_test': n_te,
-                        'auc_test': round(auc_te, 4),
-                        'prec_test': round(prec_te, 4),
-                        'pl_test': round(total_pl_te, 2),
-                        'roi_test': round(roi_te, 4),
-                        'pval_test': round(pval_te, 4),
-                        'prec_ratio': round(ratio, 4),
-                        'bets_full': np.nan,
-                        'pl_full': np.nan,
-                        'roi_full': np.nan,
-                        'pval_full': np.nan
-                    }
+                # Prepare record
+                rec = {
+                    'model': name,
+                    'params': params_copy,
+                    'threshold': t,
+                    'bets_train': n_tr,
+                    'auc_train': round(auc_tr, 4),
+                    'prec_train': round(prec_tr, 4),
+                    'pl_train': round(total_pl_tr, 2),
+                    'roi_train': round(roi_tr, 4),
+                    'pval_train': round(pval_tr, 4),
+                    'bets_test': n_te,
+                    'auc_test': round(auc_te, 4),
+                    'prec_test': round(prec_te, 4),
+                    'pl_test': round(total_pl_te, 2),
+                    'roi_test': round(roi_te, 4),
+                    'pval_test': round(pval_te, 4),
+                    'prec_ratio': round(ratio, 4),
+                    'bets_full': np.nan,
+                    'pl_full': np.nan,
+                    'roi_full': np.nan,
+                    'pval_full': np.nan
+                }
 
-                    # Full-data metrics
-                    if total_pl_tr > 0 and total_pl_te > 0:
-                        prob_full = clf.predict_proba(data[features])[:, 1]
-                        mask_full = prob_full >= t
-                        n_full = int(mask_full.sum())
-                        if n_full >= min_samples:
-                            profits_full = np.where(
-                                mask_full & (data['target'].values == 1), odds_full - 1,
-                                np.where(mask_full, -1, 0)
-                            )
-                            overall_pl = profits_full.sum()
-                            overall_roi = overall_pl / n_full
-                            overall_pval = running_ttest_p_profit(profits_full[mask_full].tolist())
+                # Full-data metrics
+                if total_pl_tr > 0 and total_pl_te > 0:
+                    prob_full = clf.predict_proba(data[features])[:, 1]
+                    mask_full = prob_full >= t
+                    n_full = int(mask_full.sum())
+                    if n_full >= min_samples:
+                        profits_full = np.where(
+                            mask_full & (data['target'].values == 1), odds_full - 1,
+                            np.where(mask_full, -1, 0)
+                        )
+                        overall_pl = profits_full.sum()
+                        overall_roi = overall_pl / n_full
+                        overall_pval = running_ttest_p_profit(profits_full[mask_full].tolist())
 
-                            print(
-                                f"Full data @ threshold {t:.2f}: bets={n_full}, pl={overall_pl:.2f}, roi={overall_roi:.3f}, pval={overall_pval:.3f}"
-                            )
+                        print(
+                            f"Full data @ threshold {t:.2f}: bets={n_full}, pl={overall_pl:.2f}, roi={overall_roi:.3f}, pval={overall_pval:.3f}"
+                        )
 
-                            rec.update({
-                                'bets_full': n_full,
-                                'pl_full': round(overall_pl, 2),
-                                'roi_full': round(overall_roi, 4),
-                                'pval_full': round(overall_pval, 4)
-                            })
-                        else:
-                            print(
-                                f"Full data @ threshold {t:.2f}: fewer than {min_samples} bets, skipping overall metrics"
-                            )
+                        rec.update({
+                            'bets_full': n_full,
+                            'pl_full': round(overall_pl, 2),
+                            'roi_full': round(overall_roi, 4),
+                            'pval_full': round(overall_pval, 4)
+                        })
+                    else:
+                        print(
+                            f"Full data @ threshold {t:.2f}: fewer than {min_samples} bets, skipping overall metrics"
+                        )
 
-                    all_metrics.append(rec)
+                all_metrics.append(rec)
 
-        # Finalize DataFrame
-        df = pd.DataFrame(all_metrics)
-        # Save only if positive P/L trains/tests
-        mask_pos = (df['pl_train'] > 0) & (df['pl_test'] > 0)
-        df_to_save = df[mask_pos]
-        if not df_to_save.empty:
-            df_to_save.sort_values('prec_ratio', ascending=False, inplace=True)
-            csv = f"model_probs_{filename_feature}_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
-            df_to_save.to_csv(csv, index=False)
-            print(f"Results saved to {csv}")
-        else:
-            print("No runs with positive P/L on both train and test; CSV not saved.")
+    # Finalize DataFrame
+    df = pd.DataFrame(all_metrics)
+    # Save only if positive P/L trains/tests
+    mask_pos = (df['pl_train'] > 0) & (df['pl_test'] > 0)
+    df_to_save = df[mask_pos]
+    if not df_to_save.empty:
+        df_to_save.sort_values('prec_ratio', ascending=False, inplace=True)
+        csv = f"model_probs_{filename_feature}_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
+        df_to_save.to_csv(csv, index=False)
+        print(f"Results saved to {csv}")
+    else:
+        print("No runs with positive P/L on both train and test; CSV not saved.")
 
-        return df
-
-
-
-
-
+    return df
 
 
 def simple_feature_importance(df, features, target_col='target'):
