@@ -1,4 +1,3 @@
-
 # goals_pipelines.py
 # -*- coding: utf-8 -*-
 """
@@ -9,16 +8,12 @@ Public API:
   - run_2h_htscore(end_period, model_dir=..., market_map=...)
 """
 
-from __future__ import annotations
-
-__all__ = ["run_u25", "run_o25", "run_2h_htscore"]
-
 # ── Shared imports ────────────────────────────────────────────────────────
 import os
 import glob
 from datetime import datetime, date
 from typing import Dict, Any, Iterable, Tuple, Optional
-
+from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 import pandas as pd
 from joblib import load
@@ -38,7 +33,7 @@ IMPORT_DIR     = r"C:\Users\leere\OneDrive\Desktop\IMPORTS"
 # Default dir for the “2H goal by HT scoreline” models (can be overridden)
 MODEL_DIR_2H_HTSCORE = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\path_ht_score"
 
-# Optional map from HT scoreline → total-goals line (used for labeling)
+# Optional map from HT scoreline → total-goals line (used for labelling)
 DEFAULT_MARKET_MAP = {
     "0-0": 0.5, "0-1": 1.5, "1-0": 1.5, "1-1": 2.5,
     "0-2": 2.5, "2-0": 2.5, "2-1": 3.5, "1-2": 3.5, "3-0": 3.5,
@@ -114,6 +109,21 @@ _COLUMN_DICT = {
 }
 
 # ── Shared helpers ───────────────────────────────────────────────────────
+def _round_half_up_2(x) -> str:
+    """Exact two-decimal string with ROUND_HALF_UP (Excel-style)."""
+    return str(Decimal(str(float(x))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+def _align_features_numeric_fill(df_in: pd.DataFrame, feature_contract: Iterable[str]) -> pd.DataFrame:
+    """
+    Reindex to training features (missing→0), coerce object→numeric (errors→NaN), fill NaN with 0.
+    Keeps row order and index intact; does not drop rows.
+    """
+    X = df_in.reindex(columns=list(feature_contract), fill_value=0)
+    for c in X.columns:
+        if pd.api.types.is_object_dtype(X[c]):
+            X[c] = pd.to_numeric(X[c], errors="coerce")
+    return X.fillna(0)
+
 def _parse_end_period(ep) -> date:
     if isinstance(ep, date):
         return ep
@@ -415,33 +425,35 @@ def _write_outputs(
     proba_col: str,
     file_tag: str
 ) -> Tuple[Dict[str, str], int]:
+    """
+    Writes ONLY the positives CSV with the four required columns:
+    EventName, Provider, MarketName, SelectionName.
+    """
     os.makedirs(import_dir, exist_ok=True)
-    out_all = os.path.join(import_dir, f"{file_tag}_fixtures_with_probs.csv")
     out_pos = os.path.join(import_dir, f"{file_tag}_predictions.csv")
 
+    # Build EventName and bet flag
     if {"home_team", "away_team"}.issubset(scored.columns):
         scored["EventName"] = scored["home_team"] + " v " + scored["away_team"]
-    scored["threshold"] = threshold
     scored["bet"] = scored[proba_col] >= threshold
 
-    preferred_first = [
-        "EventName", "date", "league", "home_team", "away_team",
-        proba_col, "threshold", "bet"
-    ]
-    cols = [c for c in preferred_first if c in scored.columns] + [c for c in scored.columns if c not in preferred_first]
-    scored_sorted = scored.sort_values(proba_col, ascending=False).reset_index(drop=True)
+    # Keep only positives and export the four required columns
+    positives = scored.loc[scored["bet"]].copy()
 
-    scored_sorted[cols].to_csv(out_all, index=False)
-    positives = scored_sorted[scored_sorted["bet"]].copy()
-    positives[cols].to_csv(out_pos, index=False)
+    # Ensure the three label columns exist (they’re set in _run_pipeline via `provider=...`)
+    for c in ["Provider", "MarketName", "SelectionName"]:
+        if c not in positives.columns:
+            positives[c] = ""
 
-    print(f"[9/9] Wrote files:")
-    print(f"      ALL fixtures → {out_all}")
-    print(f"      POSITIVES    → {out_pos}")
+    out_df = positives[["EventName", "Provider", "MarketName", "SelectionName"]].copy()
+    out_df.to_csv(out_pos, index=False)
+
+    print(f"[9/9] Wrote positives only (4 columns): {out_pos}")
     print(f"      Model file   → {model_path}")
-    print(f"      Positive selections: {len(positives)}")
+    print(f"      Positive selections: {len(out_df)}")
 
-    return {"all": out_all, "positives": out_pos}, len(positives)
+    return {"positives": out_pos}, len(out_df)
+
 
 # ── Single private runner used by U25/O25 ────────────────────────────────
 def _run_pipeline(
@@ -493,7 +505,7 @@ def _run_pipeline(
 
 # ── Public entry points (U25/O25) ────────────────────────────────────────
 def run_u25(end_period: Any) -> Dict[str, Any]:
-    """Under 2.5 Goals pipeline (writes u25_* CSVs)."""
+    """Under 2.5 Goals pipeline (writes u25_predictions.csv only)."""
     return _run_pipeline(
         end_period,
         file_path=FILE_PATH,
@@ -505,7 +517,7 @@ def run_u25(end_period: Any) -> Dict[str, Any]:
     )
 
 def run_o25(end_period: Any) -> Dict[str, Any]:
-    """Over 2.5 Goals pipeline (writes o25_* CSVs)."""
+    """Over 2.5 Goals pipeline (writes o25_predictions.csv only)."""
     return _run_pipeline(
         end_period,
         file_path=FILE_PATH,
@@ -529,13 +541,11 @@ def run_2h_htscore(
     Scores second-half goal markets conditioned on half-time scorelines.
     Writes:
       - IMPORTS/2H_GOAL_SCORELINE_ALL.csv       (positives only, compact)
-      - IMPORTS/2H_GOAL_SCORELINE_SCORED.csv    (long-form all scored rows)
-    Returns a dict with output paths and the long-form DataFrame.
+    (No long-form scored CSV is written.)
+    Returns a dict with output paths and the long-form DataFrame in-memory.
     """
     os.makedirs(import_dir, exist_ok=True)
 
-    # Reuse the same pre-processing used by U25/O25 to build match-level features,
-    # then slice fixtures in the [today, end_period] window and standardise names.
     end_date = _parse_end_period(end_period)
     today = datetime.today().date()
 
@@ -572,11 +582,9 @@ def run_2h_htscore(
         df_sub = fixtures_df.copy()
         df_sub['ht_score'] = scoreline
 
-        # Recreate country dummies if training had them
         if 'country' in df_sub.columns and any(f.startswith('country_') for f in feat_list):
             df_sub = pd.get_dummies(df_sub, columns=['country'], prefix='country')
 
-        # Align and drop NaNs
         X = _align_features(df_sub, feat_list)
         before = len(X)
         X = X.dropna()
@@ -589,11 +597,9 @@ def run_2h_htscore(
             print(f"[{scoreline}] No rows left to score.")
             continue
 
-        # Predict probability
         if hasattr(model, "predict_proba"):
             proba = model.predict_proba(X)[:, 1]
         elif hasattr(model, "decision_function"):
-            # very rare fallback
             from sklearn.preprocessing import MinMaxScaler
             scores = model.decision_function(X).reshape(-1, 1)
             proba = MinMaxScaler().fit_transform(scores).ravel()
@@ -630,15 +636,11 @@ def run_2h_htscore(
         else:
             print(f"— 0 selections for HT {scoreline} (≥ {threshold:.2f}) from {len(block)} rows")
 
-    # Long-form scored results
-    if all_rows:
-        results_long = pd.concat(all_rows, ignore_index=True)
-    else:
-        results_long = pd.DataFrame()
+    # Long-form scored results kept in memory only
+    results_long = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
 
     # Compact positives export (EventName + labels)
     positives_out_path = os.path.join(import_dir, "2H_GOAL_SCORELINE_ALL.csv")
-    scored_out_path    = os.path.join(import_dir, "2H_GOAL_SCORELINE_SCORED.csv")
 
     if all_positives:
         master_df = pd.concat(all_positives, ignore_index=True)
@@ -653,18 +655,271 @@ def run_2h_htscore(
     else:
         print("No positives found; nothing to write to 2H_GOAL_SCORELINE_ALL.csv")
 
-    # Write long-form scored rows (one row per (fixture, ht_score))
-    if not results_long.empty:
-        results_long.to_csv(scored_out_path, index=False)
-        print(f"✓ Wrote {len(results_long)} scored rows to:\n   {scored_out_path}")
-
+    # No long-form CSV written
     return {
         "end_period": end_date,
         "rows_fixtures": len(fixtures_df),
         "rows_scored_long": 0 if results_long is None else len(results_long),
         "positives_csv": positives_out_path if all_positives else None,
-        "scored_csv": scored_out_path if not results_long.empty else None,
+        "scored_csv": None,
         "results_long_df": results_long,
         "fixtures_df": fixtures_df,  # for inspection if needed
     }
+
+def _prepare_fixtures_window(end_period: Any, file_path: str) -> pd.DataFrame:
+    """
+    Shared: build match-level features and return only fixtures in [today, end_period],
+    with team-name standardisation applied.
+    """
+    end_date = _parse_end_period(end_period)
+    today = datetime.today().date()
+
+    raw = _load_and_prepare_raw(file_path)
+    data = _clip_to_period(raw, end_date)
+
+    team_df = _build_team_frame(data)
+    team_df = _enrich_team_features(team_df)
+    team_df = _add_corners_outcomes_to_team(team_df, data)
+    match_df = _prepare_match_level(team_df, data)
+
+    fixtures = match_df[(match_df['date'].dt.date >= today) & (match_df['date'].dt.date <= end_date)].copy()
+    print(f"[fixtures] Window [{today} → {end_date}]: {len(fixtures)}")
+    fixtures = _standardise_fixture_names(fixtures)
+    return fixtures
+
+
+def _ensure_training_dummies(df_in: pd.DataFrame, feature_contract: list[str]) -> pd.DataFrame:
+    """
+    Ensure that any one-hot columns expected by the trained model exist.
+    Heuristic: if feature name looks like '<base>_<level>' and 'base' exists in df_in,
+    create the full dummy set with the expected levels.
+    """
+    df = df_in.copy()
+    bases: dict[str, set[str]] = {}
+    for f in feature_contract:
+        if "_" in f:
+            base, lvl = f.split("_", 1)
+            if base in df.columns:
+                bases.setdefault(base, set()).add(lvl)
+
+    for base, expected_lvls in bases.items():
+        ser = df[base].astype("string")
+        cat = pd.Categorical(ser, categories=list(expected_lvls))
+        dms = pd.get_dummies(cat)
+        dms.columns = [f"{base}_{c}" for c in dms.columns]
+        # Make sure every expected level exists
+        for lvl in expected_lvls:
+            col = f"{base}_{lvl}"
+            if col not in dms.columns:
+                dms[col] = 0
+        # Add any missing dummy columns to df
+        for col in dms.columns:
+            if col not in df.columns:
+                df[col] = dms[col].astype("int8")
+    return df
+
+
+def run_lay_home(
+    end_period: Any,
+    pkl_path: str,
+    *,
+    file_path: str = FILE_PATH,
+    import_dir: str = IMPORT_DIR,
+    file_tag: str = "lay_home",
+) -> Dict[str, Any]:
+    """
+    LAY HOME runner.
+    - Loads a calibrated classifier bundle at `pkl_path`.
+    - Builds fixtures in [today, end_period] using the shared pipeline.
+    - Computes model-implied lay max price for the HOME selection.
+    - Writes IMPORT CSV with columns: Provider, MarketName, SelectionName, MaxPrice, EventName.
+    Returns metadata + the fixtures scored in-memory.
+    """
+    os.makedirs(import_dir, exist_ok=True)
+    end_date = _parse_end_period(end_period)
+
+    fixtures_df = _prepare_fixtures_window(end_date, file_path)
+    if fixtures_df.empty:
+        out_csv = os.path.join(import_dir, f"{file_tag}_import.csv")
+        print(f"[lay_home] No fixtures in window. Writing empty file: {out_csv}")
+        pd.DataFrame(columns=["Provider","MarketName","SelectionName","MaxPrice","EventName"]).to_csv(out_csv, index=False)
+        return {
+            "end_period": end_date,
+            "rows_fixtures": 0,
+            "output_csv": out_csv,
+            "scored_df": fixtures_df,
+        }
+
+    # Load trained bundle
+    bundle = load(pkl_path)
+    model     = bundle["model"]
+    feat_list = list(bundle["features"])
+    mode      = str(bundle.get("mode", ""))            # e.g. 'VALUE_LAY'
+    edge      = float(bundle.get("edge_param", 0.0))   # e.g. 0.05 for 5%
+
+    if not hasattr(model, "predict_proba"):
+        raise TypeError("Loaded model has no predict_proba; expected a calibrated classifier.")
+
+    # Make sure all expected dummy cols exist (e.g. country_*)
+    df_aug = _ensure_training_dummies(fixtures_df, feat_list)
+
+    # Final alignment/coercion
+    X = _align_features_numeric_fill(df_aug, feat_list)
+
+    # Predict class-1 prob as trained; for LAY_HOME we want P(home win)
+    proba = model.predict_proba(X)
+    p_pos = proba[:, 1] if getattr(proba, "ndim", 1) == 2 else proba
+    # Training convention you provided: lay-home uses (1 - p_pos) to get P(home win)
+    p_home = 1.0 - np.asarray(p_pos, dtype=float)
+
+    fair_odds_home = 1.0 / np.clip(p_home, 1e-9, 1.0)
+
+    # Edge handling (only if mode/value provided)
+    use_edge = (mode.upper() == "VALUE_LAY") and np.isfinite(edge) and (edge >= 0.0)
+    max_price = np.divide(fair_odds_home, (1.0 + edge)) if use_edge else fair_odds_home
+    # Excel-style to 2dp (consistent with your helper)
+    max_price = np.vectorize(_round_half_up_2)(max_price)
+
+    # EventName preference: EvenName → EventName → teams
+    if "EvenName" in df_aug.columns:
+        event_name = df_aug["EvenName"].astype(str)
+    elif "EventName" in df_aug.columns:
+        event_name = df_aug["EventName"].astype(str)
+    elif {"home_team", "away_team"}.issubset(df_aug.columns):
+        event_name = df_aug["home_team"].astype(str) + " v " + df_aug["away_team"].astype(str)
+    else:
+        raise KeyError("No 'EvenName'/'EventName' and cannot build from teams.")
+
+    if "home_team" not in df_aug.columns:
+        raise KeyError("Fixtures must contain 'home_team' to build SelectionName.")
+
+    import_df = pd.DataFrame({
+        "Provider":      "lay_home",
+        "MarketName":    "Match Odds",
+        "SelectionName": df_aug["home_team"].astype(str),
+        "MaxPrice":      max_price,
+        "EventName":     event_name,
+    })
+
+    out_csv = os.path.join(import_dir, f"{file_tag}_import.csv")
+    import_df.to_csv(out_csv, index=False)
+
+    print(f"[lay_home] Wrote {len(import_df)} rows to: {out_csv}")
+    print(f"           Model file → {pkl_path} | mode={mode} edge={edge}")
+
+    # Attach the prices back to fixtures_df for inspection
+    out_df = fixtures_df.loc[X.index].copy()
+    out_df["lay_home_max_price"] = pd.to_numeric(import_df["MaxPrice"], errors="coerce")
+
+    return {
+        "end_period": end_date,
+        "rows_fixtures": len(fixtures_df),
+        "rows_scored": len(out_df),
+        "output_csv": out_csv,
+        "model_path": pkl_path,
+        "mode": mode,
+        "edge": edge,
+        "scored_df": out_df,
+    }
+
+def run_lay_away(
+    end_period: Any,
+    pkl_path: str,
+    *,
+    file_path: str = FILE_PATH,
+    import_dir: str = IMPORT_DIR,
+) -> Dict[str, Any]:
+    """
+    LAY AWAY runner.
+
+    Loads a calibrated classifier bundle at `pkl_path`, builds fixtures in
+    [today, end_period], computes model-implied lay max price for the AWAY
+    selection (edge-adjusted if the bundle has mode='VALUE_LAY' and edge_param),
+    and writes IMPORT CSV with columns:
+      Provider, MarketName, SelectionName, MaxPrice, EventName
+
+    Returns metadata and a scored DataFrame in-memory.
+    """
+    os.makedirs(import_dir, exist_ok=True)
+    end_date = _parse_end_period(end_period)
+
+    fixtures_df = _prepare_fixtures_window(end_date, file_path)
+    out_csv = os.path.join(import_dir, "lay_away_import.csv")
+
+    if fixtures_df.empty:
+        pd.DataFrame(columns=["Provider","MarketName","SelectionName","MaxPrice","EventName"]).to_csv(out_csv, index=False)
+        print(f"[lay_away] No fixtures in window. Wrote empty CSV: {out_csv}")
+        return {
+            "end_period": end_date, "rows_fixtures": 0, "rows_scored": 0,
+            "output_csv": out_csv, "model_path": pkl_path, "scored_df": fixtures_df,
+        }
+
+    bundle    = load(pkl_path)
+    model     = bundle["model"]
+    feat_list = list(bundle["features"])
+    mode      = str(bundle.get("mode", ""))
+    edge      = float(bundle.get("edge_param", 0.0))
+
+    if not hasattr(model, "predict_proba"):
+        raise TypeError("Loaded model has no predict_proba; expected a calibrated classifier.")
+
+    # Make sure all expected dummy columns exist
+    df_aug = _ensure_training_dummies(fixtures_df, feat_list)
+    # Align/coerce numerics safely (uses your existing helper)
+    X = _align_features_numeric_fill(df_aug, feat_list)
+
+    proba = model.predict_proba(X)
+    p_pos = proba[:, 1] if getattr(proba, "ndim", 1) == 2 else proba
+
+    # Training convention: for LAY we invert class-1 to get P(away win)
+    p_away = 1.0 - np.asarray(p_pos, dtype=float)
+    fair_odds_away = 1.0 / np.clip(p_away, 1e-9, 1.0)
+
+    # Edge handling
+    use_edge = (mode.upper() == "VALUE_LAY") and np.isfinite(edge) and (edge >= 0.0)
+    max_price = np.divide(fair_odds_away, (1.0 + edge)) if use_edge else fair_odds_away
+    # Excel-style 2dp rounding
+    max_price = np.array([_round_half_up_2(v) for v in max_price], dtype=object)
+
+    # EventName: EvenName → EventName → "Home v Away"
+    if "EvenName" in df_aug.columns:
+        event_name = df_aug["EvenName"].astype(str)
+    elif "EventName" in df_aug.columns:
+        event_name = df_aug["EventName"].astype(str)
+    elif {"home_team","away_team"}.issubset(df_aug.columns):
+        event_name = df_aug["home_team"].astype(str) + " v " + df_aug["away_team"].astype(str)
+    else:
+        raise KeyError("No 'EvenName'/'EventName' present and cannot build from teams.")
+
+    if "away_team" not in df_aug.columns:
+        raise KeyError("Fixtures must contain 'away_team' for LAY AWAY SelectionName.")
+
+    import_df = pd.DataFrame({
+        "Provider":      "lay_away",
+        "MarketName":    "Match Odds",
+        "SelectionName": df_aug["away_team"].astype(str),
+        "MaxPrice":      max_price,
+        "EventName":     event_name,
+    })
+
+    import_df.to_csv(out_csv, index=False)
+    print(f"[lay_away] Wrote {len(import_df)} rows → {out_csv}")
+    print(f"           Model → {pkl_path} | mode={mode} edge={edge}")
+
+    # Attach price back onto fixtures for inspection
+    out_df = fixtures_df.loc[X.index].copy()
+    out_df["lay_away_max_price"] = pd.to_numeric(import_df["MaxPrice"], errors="coerce")
+
+    return {
+        "end_period": end_date,
+        "rows_fixtures": len(fixtures_df),
+        "rows_scored": len(out_df),
+        "output_csv": out_csv,
+        "model_path": pkl_path,
+        "mode": mode,
+        "edge": edge,
+        "scored_df": out_df,
+    }
+
+
 

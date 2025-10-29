@@ -835,12 +835,76 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    fl.run_models_outcome(matches, features, min_samples=500, min_test_samples=500,
-                     precision_test_threshold = 0.6,
-                     n_random_param_sets =200,
-                     cpu_jobs=2,
-                     market = 'LAY_AWAY'
-                     )
+    # CLASSIFY
+    # fl.run_models_outcome(
+    #     matches_filtered=matches,
+    #     features=features,
+    #     market="LAY_AWAY",
+    #
+    #     # search/training
+    #     n_random_param_sets=5, cpu_jobs=5,
+    #     min_samples=500, min_test_samples=500,
+    #     precision_test_threshold=0.10,
+    #
+    #     # force CLASSIFY mode (not VALUE)
+    #     use_value_for_lay=False,
+    #     use_value_for_back=False,
+    #
+    #     # CLASSIFY settings
+    #     classify_side="lay",
+    #     classify_odds_column="away_odds",  # needed for real P/L on LAY_AWAY
+    #     # optional sweeps:
+    #     # thresholds=np.round(np.arange(0.10, 0.91, 0.01), 2),
+    #     # classify_odds_min_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
+    #     # classify_odds_max_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
+    #     # classify_odds_min_grid=np.array([1.01]),  # collapse band sweep
+    #     # classify_odds_max_grid=np.array([1000.0]),  # collapse band sweep
+    #
+    #     # test BOTH classify-lay staking variants:
+    #     classify_lay_flat_stake=1.0,  # stake per bet (flat-stake variant)
+    #     classify_lay_liability=1.0,  # liability per bet (flat-liability variant)
+    #
+    #     # outputs
+    #     save_bets_csv=True,
+    #     save_all_bets_csv=True,
+    #     plot_pl=True
+    # )
+    # VALUE
+    fl.run_models_outcome(
+        matches_filtered=matches,
+        features=features,
+        market="LAY_AWAY",
+
+        # train/search
+        n_random_param_sets=500, cpu_jobs=6,
+        min_samples=500, min_test_samples=500,
+        precision_test_threshold=0.10,
+
+        # >>> VALUE mode ON for LAY <<<
+        use_value_for_lay=True,
+        use_value_for_back=False,
+
+        # edge sweep (fair ≥ (1+edge)*market)
+        value_edge_grid_lay=np.round(np.arange(0.00, 0.201, 0.01), 2),
+
+        # staking-plan search across lay plans
+        enable_staking_plan_search=True,
+        staking_plan_lay_options=["liability", "flat_stake"],
+
+        # lay staking parameters / bounds
+        liability_test=1.0,
+        lay_flat_stake=1.0,
+        lay_edge_scale=0.05,
+        kelly_fraction_lay=1.0,
+        min_lay_stake=0.0, max_lay_stake=1.0,
+        min_lay_liability=0.0, max_lay_liability=2.0,
+
+        # economics
+        commission_rate=0.02,
+
+        # outputs
+        save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
+    )
 
     end = time.time()
 

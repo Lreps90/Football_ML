@@ -835,12 +835,77 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    fl.run_models_outcome(matches, features, min_samples=500, min_test_samples=500,
-                     precision_test_threshold = 0.6,
-                     n_random_param_sets = 200,
-                     cpu_jobs=3,
-                     market = 'LAY_HOME'
-                     )
+    # CLASSIFY
+    # fl.run_models_outcome(
+    #     matches_filtered=matches,
+    #     features=features,
+    #     market="LAY_HOME",
+    #
+    #     # force CLASSIFY (not VALUE)
+    #     use_value_for_lay=False,
+    #     use_value_for_back=False,
+    #
+    #     # classify settings (lay side, use home odds for P/L)
+    #     classify_side="lay",
+    #     classify_odds_column="home_odds",  # REQUIRED for real P/L
+    #
+    #     # (fast) coarse search — adjust as you like
+    #     thresholds=np.round(np.arange(0.20, 0.81, 0.05), 2),
+    #     #classify_odds_min_grid=np.array([1.01]),  # collapse band sweep (fast)
+    #     #classify_odds_max_grid=np.array([1000.0]),
+    #     classify_odds_min_grid=np.round(np.arange(1.20, 6.01, 0.40), 2),
+    #     classify_odds_max_grid=np.round(np.arange(1.80, 10.01, 0.40), 2),
+    #
+    #     # test BOTH lay staking variants during CLASSIFY
+    #     classify_lay_flat_stake=1.0,  # flat stake per bet
+    #     classify_lay_liability=1.0,  # flat liability per bet
+    #
+    #     # training/search controls
+    #     base_model="xgb", search_mode="random",
+    #     n_random_param_sets=5, cpu_jobs=6,
+    #     min_samples=400, min_test_samples=400,
+    #     precision_test_threshold=0.10,
+    #     max_precision_drop=0.05,
+    #
+    #     # economics & outputs
+    #     commission_rate=0.02,
+    #     save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
+    # )
+
+    # VALUE
+    fl.run_models_outcome(
+        matches_filtered=matches,
+        features=features,
+        market="LAY_HOME",
+
+        # force VALUE (LAY)
+        use_value_for_lay=True,
+        use_value_for_back=False,
+
+        # edge sweep: fair ≥ (1 + edge) × market
+        value_edge_grid_lay=np.round(np.arange(0.00, 0.201, 0.01), 2),
+
+        # (optional) search only flat-stake & flat-liability plans
+        enable_staking_plan_search=True,
+        staking_plan_lay_options=["flat_stake", "liability"],
+
+        # staking parameters / bounds for LAY
+        lay_flat_stake=1.0,
+        liability_test=1.0,
+        min_lay_stake=0.0, max_lay_stake=1.0,
+        min_lay_liability=0.0, max_lay_liability=2.0,
+
+        # training/search controls
+        base_model="xgb", search_mode="random",
+        n_random_param_sets=500, cpu_jobs=6,
+        min_samples=400, min_test_samples=400,
+        precision_test_threshold=0.10,
+        max_precision_drop=0.05,
+
+        # economics & outputs
+        commission_rate=0.02,
+        save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
+    )
 
     end = time.time()
 

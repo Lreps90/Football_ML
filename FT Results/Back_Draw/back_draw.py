@@ -835,12 +835,74 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    fl.run_models_outcome(matches, features, min_samples=250, min_test_samples=250,
-                     precision_test_threshold = 0.2,
-                     n_random_param_sets = 500,
-                     cpu_jobs=4,
-                     market = 'BACK_DRAW'
-                     )
+    # CLASSIFY
+    fl.run_models_outcome(
+        matches_filtered=matches,
+        features=features,
+        market="BACK_DRAW",
+
+        # force CLASSIFY (not VALUE)
+        use_value_for_back=False,
+        use_value_for_lay=False,
+
+        # classify settings (back side, use draw odds for P/L)
+        classify_side="back",
+        classify_odds_column="draw_odds",  # REQUIRED for real P/L
+
+        # (fast) coarse search — tweak as needed
+        thresholds=np.round(np.arange(0.20, 0.81, 0.05), 2),
+        # classify_odds_min_grid=np.array([1.01]),  # collapse band sweep (fast)
+        # classify_odds_max_grid=np.array([1000.0]),
+        classify_odds_min_grid=np.round(np.arange(1.20, 6.01, 0.40), 2),
+        classify_odds_max_grid = np.round(np.arange(1.80, 10.01, 0.40), 2),
+
+    # training/search controls
+        base_model="xgb", search_mode="random",
+        n_random_param_sets=100, cpu_jobs=5,
+        min_samples=400, min_test_samples=400,
+        precision_test_threshold=0.10,
+        max_precision_drop=0.05,
+
+        # economics & outputs
+        commission_rate=0.02,
+        save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
+    )
+
+    # VALUE
+    fl.run_models_outcome(
+        matches_filtered=matches,
+        features=features,
+        market="BACK_DRAW",
+
+        # force VALUE (BACK)
+        use_value_for_back=True,
+        use_value_for_lay=False,
+
+        # edge sweep: market ≥ (1 + edge) × fair
+        value_edge_grid_back=np.round(np.arange(0.00, 0.201, 0.01), 2),
+
+        # (optional) staking-plan search for BACK
+        enable_staking_plan_search=True,
+        staking_plan_back_options=["flat", "edge_prop", "kelly"],
+
+        # staking parameters / bounds (BACK)
+        back_stake_test=1.0,
+        back_edge_scale=0.10,
+        kelly_fraction_back=0.25,
+        bankroll_back=100.0,
+        min_back_stake=0.0, max_back_stake=10.0,
+
+        # training/search controls
+        base_model="xgb", search_mode="random",
+        n_random_param_sets=100, cpu_jobs=5,
+        min_samples=400, min_test_samples=400,
+        precision_test_threshold=0.10,
+        max_precision_drop=0.05,
+
+        # economics & outputs
+        commission_rate=0.02,
+        save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
+    )
 
     end = time.time()
 

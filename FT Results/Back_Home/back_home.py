@@ -835,11 +835,21 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    fl.run_models_outcome(matches, features, min_samples=500, min_test_samples=500,
-                     precision_test_threshold = 0.3,
-                     n_random_param_sets = 500,
-                     cpu_jobs=4,
-                     market = 'BACK_HOME'
+    fl.run_models_outcome(matches_filtered=matches,
+                          features=features,
+                          market='BACK_HOME',
+                          n_random_param_sets=5, cpu_jobs=2,
+                          min_samples=500, min_test_samples=500,
+                          precision_test_threshold=0.5,
+                          value_edge_grid_back=np.round(np.arange(0.00, 0.201, 0.01), 2),
+                          enable_staking_plan_search=True,  # ← single plan
+                          staking_plan_lay="flat_stake",  # choose it here
+                          save_bets_csv=True, plot_pl=True, save_all_bets_csv=True,
+                          classify_odds_column='home_odds',
+                          classify_odds_min_grid=np.array([1.00]),  # single value → no sweep
+                          classify_odds_max_grid=np.array([10.00]),  # single value → no sweep
+                          #classify_odds_min_grid=np.arange(1.0, 4.01, 0.25),
+                          #classify_odds_max_grid=np.arange(1.5, 10.01, 0.25)
                      )
 
     end = time.time()
