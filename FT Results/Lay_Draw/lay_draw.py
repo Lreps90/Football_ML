@@ -790,7 +790,7 @@ def pre_prepared_data(file_path):
     data.dropna(inplace=True)
     #data['ht_score'] = data['home_goals_ht'].astype(str) + '-' + data['away_goals_ht'].astype(str)
     # 1 if away does not win (home win or draw), 0 if away wins
-    data['target'] = (data['away_goals_ft'] == data['home_goals_ft']).astype(int)
+    data['target'] = (data['away_goals_ft'] != data['home_goals_ft']).astype(int)
     return data
 
 
@@ -862,7 +862,7 @@ if __name__ == "__main__":
 
         # training/search controls
         base_model="xgb", search_mode="random",
-        n_random_param_sets=100, cpu_jobs=6,
+        n_random_param_sets=100, cpu_jobs=10,
         min_samples=400, min_test_samples=400,
         precision_test_threshold=0.10,
         max_precision_drop=0.05,
@@ -897,7 +897,7 @@ if __name__ == "__main__":
 
         # training/search controls
         base_model="xgb", search_mode="random",
-        n_random_param_sets=100, cpu_jobs=6,
+        n_random_param_sets=100, cpu_jobs=10,
         min_samples=400, min_test_samples=400,
         precision_test_threshold=0.10,
         max_precision_drop=0.05,

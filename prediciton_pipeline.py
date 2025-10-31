@@ -921,5 +921,130 @@ def run_lay_away(
         "scored_df": out_df,
     }
 
+def run_lay_draw(
+    end_period: Any,
+    pkl_path: str,
+    *,
+    file_path: str = FILE_PATH,
+    import_dir: str = IMPORT_DIR,
+    file_tag: str = "lay_draw",
+) -> Dict[str, Any]:
+    """
+    LAY DRAW runner.
+
+    - Loads a calibrated classifier bundle at `pkl_path`.
+    - Builds fixtures in [today, end_period] using the shared pipeline.
+    - Estimates model-implied fair odds for the DRAW, then applies optional
+      edge adjustment when bundle has mode='VALUE_LAY' and 'edge_param'.
+    - Writes IMPORT CSV with columns:
+        Provider, MarketName, SelectionName, MaxPrice, EventName
+
+    Returns metadata + a scored DataFrame in-memory with audit columns.
+    """
+    import os
+    os.makedirs(import_dir, exist_ok=True)
+    end_date = _parse_end_period(end_period)
+
+    # Build fixtures window via your shared pipeline
+    fixtures_df = _prepare_fixtures_window(end_date, file_path)
+    out_csv = os.path.join(import_dir, f"{file_tag}_import.csv")
+
+    if fixtures_df.empty:
+        pd.DataFrame(
+            columns=["Provider", "MarketName", "SelectionName", "MaxPrice", "EventName"]
+        ).to_csv(out_csv, index=False)
+        print(f"[lay_draw] No fixtures in window. Wrote empty CSV: {out_csv}")
+        return {
+            "end_period": end_date,
+            "rows_fixtures": 0,
+            "rows_scored": 0,
+            "output_csv": out_csv,
+            "model_path": pkl_path,
+            "scored_df": fixtures_df,
+        }
+
+    # Load model bundle
+    bundle    = load(pkl_path)
+    model     = bundle["model"]
+    feat_list = list(bundle["features"])
+    mode      = str(bundle.get("mode", ""))
+    edge      = float(bundle.get("edge_param", 0.0))
+    target_positive_label = str(bundle.get("target_positive_label", "")).lower()
+
+    if not hasattr(model, "predict_proba"):
+        raise TypeError("Loaded model has no predict_proba; expected a calibrated classifier.")
+
+    # Minor robustness (typoed column sometimes appears)
+    if "county" in fixtures_df.columns and "country" not in fixtures_df.columns:
+        fixtures_df = fixtures_df.rename(columns={"county": "country"})
+
+    # Ensure expected one-hot columns and align numerics
+    df_aug = _ensure_training_dummies(fixtures_df, feat_list)
+    X      = _align_features_numeric_fill(df_aug, feat_list)
+
+    # Predict class-1 probability from calibrated classifier
+    proba = model.predict_proba(X)
+    p_pos = proba[:, 1] if getattr(proba, "ndim", 1) == 2 else proba
+
+    # Map to DRAW probability:
+    # If bundle declares the positive label explicitly, use it; otherwise default
+    # to the same convention you used for LAY_HOME/AWAY (invert p_pos).
+    if target_positive_label in {"draw", "the_draw", "x", "d"}:
+        p_draw = np.asarray(p_pos, dtype=float)
+        assumed = False
+    elif target_positive_label in {"not_draw", "no_draw", "!draw"}:
+        p_draw = 1.0 - np.asarray(p_pos, dtype=float)
+        assumed = False
+    else:
+        # Fallback (same pattern as your other LAY runners)
+        p_draw = 1.0 - np.asarray(p_pos, dtype=float)
+        assumed = True
+
+    # Fair odds & edge-adjusted lay max price
+    fair_odds_draw = 1.0 / np.clip(p_draw, 1e-9, 1.0)
+    use_edge = (mode.upper() == "VALUE_LAY") and np.isfinite(edge) and (edge >= 0.0)
+    max_price = np.divide(fair_odds_draw, (1.0 + edge)) if use_edge else fair_odds_draw
+    max_price_str = np.vectorize(_round_half_up_2)(max_price)
+
+    # EventName preference: EvenName → EventName → "Home v Away"
+    if "EvenName" in df_aug.columns:
+        event_name = df_aug["EvenName"].astype(str)
+    elif "EventName" in df_aug.columns:
+        event_name = df_aug["EventName"].astype(str)
+    elif {"home_team", "away_team"}.issubset(df_aug.columns):
+        event_name = df_aug["home_team"].astype(str) + " v " + df_aug["away_team"].astype(str)
+    else:
+        raise KeyError("No 'EvenName'/'EventName' present and cannot build from teams.")
+
+    # Build IMPORT CSV (exact columns)
+    import_df = pd.DataFrame({
+        "Provider":      "lay_draw",
+        "MarketName":    "Match Odds",
+        "SelectionName": "The Draw",
+        "MaxPrice":      max_price_str,   # 2dp Excel-style strings
+        "EventName":     event_name,
+    })
+    import_df.to_csv(out_csv, index=False)
+    print(f"[lay_draw] Wrote {len(import_df)} rows → {out_csv}")
+    print(f"           Model → {pkl_path} | mode={mode} edge={edge}"
+          + (" | (assumed invert p_pos for draw)" if assumed else ""))
+
+    # Attach audit columns back onto fixtures for inspection
+    out_df = fixtures_df.loc[X.index].copy()
+    out_df["lay_draw_fair"] = fair_odds_draw
+    out_df["lay_draw_max_price"] = pd.to_numeric(import_df["MaxPrice"], errors="coerce")
+    out_df["lay_draw_edge_param"] = edge
+    out_df["lay_draw_label_assumed"] = assumed
+
+    return {
+        "end_period": end_date,
+        "rows_fixtures": len(fixtures_df),
+        "rows_scored": len(out_df),
+        "output_csv": out_csv,
+        "model_path": pkl_path,
+        "mode": mode,
+        "edge": edge,
+        "scored_df": out_df,
+    }
 
 

@@ -7643,6 +7643,2663 @@ def _loguniform(a, b):
 #         'all_bets_csv': all_bets_csv_path,
 #     }
 
+# def run_models_outcome(
+#     matches_filtered: pd.DataFrame,
+#     features: list,
+#     # ── gates ──────────────────────────────────────────────────────────────
+#     min_samples: int = 200,
+#     min_test_samples: int = 100,
+#     precision_test_threshold: float = 0.80,
+#     # ── model/search ───────────────────────────────────────────────────────
+#     base_model: str = "xgb",
+#     search_mode: str = "random",
+#     n_random_param_sets: int = 10,
+#     cpu_jobs: int = 6,
+#     top_k: int = 10,
+#     thresholds: np.ndarray | None = None,        # USED for CLASSIFY markets
+#     out_dir: str | None = None,
+#     # ── anti-overfitting ──────────────────────────────────────────────────
+#     val_conf_level: float = 0.99,
+#     max_precision_drop: float = 1,
+#     # ── failure handling ───────────────────────────────────────────────────
+#     on_fail: str = "return",                     # "return" | "warn" | "raise"
+#     save_diagnostics_on_fail: bool = True,
+#     # ── market ─────────────────────────────────────────────────────────────
+#     market: str = "LAY_AWAY",                    # LAY_* | BACK_* | OVER | UNDER (or other classify markets)
+#
+#     # ── VALUE LAY controls ────────────────────────────────────────────────
+#     use_value_for_lay: bool = True,
+#     value_edge_grid_lay: np.ndarray | None = None,   # e.g. np.round(np.arange(0.00,0.201,0.01),2)
+#
+#     # Staking plan search toggle + options (VALUE modes)
+#     enable_staking_plan_search: bool = False,
+#     staking_plan_lay_options: list[str] | None = None,
+#     staking_plan_back_options: list[str] | None = None,
+#
+#     # Single-plan (used when enable_staking_plan_search=False)
+#     staking_plan_lay: str = "liability",             # "liability" | "flat_stake" | "edge_prop" | "kelly_approx"
+#     staking_plan_back: str = "flat",                 # "flat" | "edge_prop" | "kelly"
+#
+#     # ── LAY staking parameters (balanced defaults) ────────────────────────
+#     liability_test: float = 1.0,
+#     lay_flat_stake: float = 1.0,
+#     lay_edge_scale: float = 0.05,
+#     kelly_fraction_lay: float = 1.0,
+#     min_lay_stake: float = 0.0,
+#     max_lay_stake: float = 1.0,
+#     min_lay_liability: float = 0.0,
+#     max_lay_liability: float = 2.0,
+#
+#     # ── VALUE BACK controls ────────────────────────────────────────────────
+#     use_value_for_back: bool = True,
+#     value_edge_grid_back: np.ndarray | None = None,
+#
+#     # BACK staking parameters
+#     back_stake_test: float = 1.0,
+#     back_edge_scale: float = 0.10,
+#     kelly_fraction_back: float = 0.25,
+#     bankroll_back: float = 100.0,
+#     min_back_stake: float = 0.0,
+#     max_back_stake: float = 10.0,
+#
+#     # ── CLASSIFY staking / odds (adds odds-band grid sweep) ───────────────
+#     classify_stake: float = 1.0,                      # flat stake for BACK classify
+#     classify_odds_column: str | None = None,          # e.g. 'away_odds', 'over25_odds'
+#     classify_side: str = "back",                      # "back" or "lay" for classify bets
+#     classify_odds_min_grid: np.ndarray | None = None, # e.g. np.arange(1.00, 10.01, 0.25)
+#     classify_odds_max_grid: np.ndarray | None = None, # e.g. np.arange(1.00, 10.01, 0.25)
+#
+#     # ── NEW: CLASSIFY-LAY dual staking knobs ──────────────────────────────
+#     classify_lay_flat_stake: float = 1.0,             # stake per bet (flat-stake variant)
+#     classify_lay_liability: float = 1.0,              # liability per bet (flat-liability variant)
+#
+#     # ── COMMISSION (applied to net winning returns) ───────────────────────
+#     commission_rate: float = 0.02,  # 2% commission on winnings
+#
+#     # ── OUTPUTS: chosen model ─────────────────────────────────────────────
+#     save_bets_csv: bool = False,
+#     bets_csv_dir: str | None = None,
+#     plot_pl: bool = False,
+#     plot_dir: str | None = None,
+#     plot_title_suffix: str = "",
+#     # ── OUTPUTS: ALL candidates ───────────────────────────────────────────
+#     save_all_bets_csv: bool = False,
+#     all_bets_dir: str | None = None,
+#     all_bets_include_failed: bool = True,
+# ):
+#     """
+#     VALUE modes behave as before (commission-adjusted). CLASSIFY now also:
+#       • Sweeps thresholds
+#       • If `classify_odds_column` provided, sweeps (odds_min, odds_max) bands over [1.00, 10.00] step 0.25
+#       • Supports `classify_side="back"| "lay"`:
+#           - back: bet when p>=thr within odds band, P/L like back bets (flat stake)
+#           - lay:  bet when p<=1-thr within odds band, P/L like lay bets; evaluates BOTH flat-stake & flat-liability variants
+#       • Computes commission-adjusted P/L and p-value vs break-even
+#       • Ranks by smallest p-value (then P/L), saves bets CSV and P/L plot
+#     """
+#     # ---------------- setup ----------------
+#     import os, secrets, hashlib, json
+#     from datetime import datetime
+#     import numpy as np
+#     import pandas as pd
+#     from itertools import product
+#     from sklearn.model_selection import ParameterSampler
+#     from sklearn.metrics import precision_score, accuracy_score, roc_auc_score, log_loss, brier_score_loss
+#     from sklearn.calibration import CalibratedClassifierCV
+#     from sklearn.pipeline import Pipeline, make_pipeline
+#     from sklearn.preprocessing import StandardScaler
+#     from sklearn.neural_network import MLPClassifier
+#     from joblib import Parallel, delayed, parallel_backend
+#     from tqdm import tqdm
+#     from tqdm_joblib import tqdm_joblib
+#     import joblib
+#
+#     # --- xgboost import (optional)
+#     try:
+#         import xgboost as xgb
+#         _HAS_XGB_LOCAL = True
+#     except Exception:
+#         _HAS_XGB_LOCAL = False
+#     _HAS_XGB = globals().get("_HAS_XGB", _HAS_XGB_LOCAL)
+#     if base_model == "xgb" and not _HAS_XGB:
+#         raise ImportError("XGBoost not available; set base_model='mlp' or install xgboost.")
+#
+#     # --- random dists
+#     try:
+#         _randint; _uniform; _loguniform
+#     except NameError:
+#         from scipy.stats import randint as _randint
+#         from scipy.stats import uniform as _uniform
+#         from scipy.stats import loguniform as _loguniform
+#
+#     # --- Wilson LCB & normal CDF
+#     try:
+#         from scipy.stats import norm
+#         _Z = lambda conf: float(norm.ppf(1 - (1 - conf) / 2))
+#         _Phi = lambda z: float(norm.cdf(z))
+#     except Exception:
+#         import math
+#         _Z = lambda conf: 1.96 if abs(conf - 0.95) < 1e-6 else 1.64
+#         _Phi = lambda z: 0.5 * (1.0 + math.erf(z / (2**0.5)))
+#
+#     def _wilson_lcb(tp: int, fp: int, conf: float) -> float:
+#         n = tp + fp
+#         if n <= 0: return 0.0
+#         p = tp / n
+#         z = _Z(conf)
+#         denom = 1.0 + (z*z)/n
+#         centre = p + (z*z)/(2*n)
+#         rad = z * np.sqrt((p*(1-p)/n) + (z*z)/(4*n*n))
+#         return max(0.0, (centre - rad) / denom)
+#
+#     # defaults
+#     if thresholds is None:
+#         thresholds = np.round(np.arange(0.10, 0.91, 0.01), 2)  # CLASSIFY only
+#     if value_edge_grid_lay is None:
+#         value_edge_grid_lay = np.round(np.arange(0.00, 0.201, 0.01), 2)
+#     if value_edge_grid_back is None:
+#         value_edge_grid_back = np.round(np.arange(0.00, 0.201, 0.01), 2)
+#     if classify_odds_min_grid is None:
+#         classify_odds_min_grid = np.round(np.arange(1.00, 10.01, 0.25), 2)
+#     if classify_odds_max_grid is None:
+#         classify_odds_max_grid = np.round(np.arange(1.00, 10.01, 0.25), 2)
+#     classify_side = str(classify_side).lower().strip()
+#     if classify_side not in ("back","lay"):
+#         raise ValueError("classify_side must be 'back' or 'lay'")
+#
+#     # normalise staking-plan options
+#     if staking_plan_lay_options is None:
+#         staking_plan_lay_options = ["liability", "flat_stake", "edge_prop", "kelly_approx"]
+#     if staking_plan_back_options is None:
+#         staking_plan_back_options = ["flat", "edge_prop", "kelly"]
+#     if not enable_staking_plan_search:
+#         staking_plan_lay_options = [staking_plan_lay]
+#         staking_plan_back_options = [staking_plan_back]
+#
+#     # --- paths
+#     BASE = r"C:\Users\leere\PycharmProjects\Football_ML3\FT Results"
+#     PKL_DIRS = {
+#         "LAY_HOME":  os.path.join(BASE, "Lay_Home",  "model_file"),
+#         "LAY_AWAY":  os.path.join(BASE, "Lay_Away",  "model_file"),
+#         "LAY_DRAW":  os.path.join(BASE, "Lay_Draw",  "model_file"),
+#         "BACK_HOME": os.path.join(BASE, "Back_Home", "model_file"),
+#         "BACK_AWAY": os.path.join(BASE, "Back_Away", "model_file"),
+#         "BACK_DRAW": os.path.join(BASE, "Back_Draw", "model_file"),
+#         "OVER":      os.path.join(BASE, "Over_2_5",  "model_file"),
+#         "UNDER":     os.path.join(BASE, "Under_2_5", "model_file"),
+#     }
+#     CSV_DIRS = {
+#         "LAY_HOME":  os.path.join(BASE, "Lay_Home",  "best_model_metrics"),
+#         "LAY_AWAY":  os.path.join(BASE, "Lay_Away",  "best_model_metrics"),
+#         "LAY_DRAW":  os.path.join(BASE, "Lay_Draw",  "best_model_metrics"),
+#         "BACK_HOME": os.path.join(BASE, "Back_Home", "best_model_metrics"),
+#         "BACK_AWAY": os.path.join(BASE, "Back_Away", "best_model_metrics"),
+#         "BACK_DRAW": os.path.join(BASE, "Back_Draw", "best_model_metrics"),
+#         "OVER":      os.path.join(BASE, "Over_2_5",  "best_model_metrics"),
+#         "UNDER":     os.path.join(BASE, "Under_2_5", "best_model_metrics"),
+#     }
+#
+#     market = str(market).upper().strip()
+#     if market not in PKL_DIRS: raise ValueError(f"Unsupported market '{market}'.")
+#     _IS_LAY  = market.startswith("LAY_")
+#     _IS_BACK = market.startswith("BACK_")
+#     _USE_VALUE_LAY  = bool(use_value_for_lay and _IS_LAY)
+#     _USE_VALUE_BACK = bool(use_value_for_back and _IS_BACK)
+#     _USE_VALUE = _USE_VALUE_LAY or _USE_VALUE_BACK
+#     _IS_CLASSIFY = not _USE_VALUE
+#
+#     csv_save_dir = out_dir if (out_dir and len(str(out_dir)) > 0) else CSV_DIRS[market]
+#     os.makedirs(csv_save_dir, exist_ok=True)
+#     model_dir = PKL_DIRS[market]; os.makedirs(model_dir, exist_ok=True)
+#     if bets_csv_dir is None: bets_csv_dir = csv_save_dir
+#     if plot_dir is None: plot_dir = csv_save_dir
+#     os.makedirs(bets_csv_dir, exist_ok=True)
+#     os.makedirs(plot_dir, exist_ok=True)
+#     if all_bets_dir is None:
+#         all_bets_dir = os.path.join(os.path.dirname(CSV_DIRS[market]), "all_bets")
+#     os.makedirs(all_bets_dir, exist_ok=True)
+#
+#     RUN_SEED = secrets.randbits(32)
+#     def _seed_from(*vals) -> int:
+#         h = hashlib.blake2b(digest_size=8)
+#         h.update(int(RUN_SEED).to_bytes(8,'little',signed=False))
+#         for v in vals: h.update(str(v).encode('utf-8'))
+#         return int.from_bytes(h.digest(),'little') & 0x7FFFFFFF
+#
+#     def _as_float(x):
+#         try: return float(x)
+#         except Exception: return float(str(x))
+#     def _as_int(x): return int(float(x))
+#
+#     # ---------------- data ----------------
+#     req_cols = {'date','target'}
+#     if _USE_VALUE: req_cols |= {'home_odds','draw_odds','away_odds'}
+#     missing = req_cols - set(matches_filtered.columns)
+#     if missing: raise ValueError(f"Missing required columns: {sorted(missing)}")
+#
+#     df = matches_filtered.copy()
+#     df['date'] = pd.to_datetime(df['date'], errors='coerce')
+#     df = df.sort_values('date').reset_index(drop=True)
+#
+#     cols_needed = list(set(features) | {'target'} | ({'home_odds','draw_odds','away_odds'} if _USE_VALUE else set()))
+#     if _IS_CLASSIFY and classify_odds_column is not None:
+#         cols_needed = list(set(cols_needed) | {classify_odds_column})
+#     df = df.dropna(subset=cols_needed).reset_index(drop=True)
+#
+#     X = df[features].copy()
+#     y = df['target'].astype(int).reset_index(drop=True)
+#
+#     n = len(X)
+#     if n < max(min_samples * 3, 500): raise RuntimeError(f"Not enough rows: {n}")
+#
+#     # temporal split
+#     test_start = int(0.85 * n)
+#     pretest_end = test_start
+#     X_test = X.iloc[test_start:].reset_index(drop=True)
+#     y_test = y.iloc[test_start:].reset_index(drop=True)
+#     df_test = df.iloc[test_start:].reset_index(drop=True)
+#
+#     # rolling validation folds
+#     N_FOLDS = 5
+#     total_val_len = max(1, int(0.15 * n))
+#     val_len = max(1, total_val_len // N_FOLDS)
+#     fold_val_ends = [pretest_end - total_val_len + (i + 1) * val_len for i in range(N_FOLDS)]
+#     fold_val_starts = [end - val_len for end in fold_val_ends]
+#     if fold_val_ends:
+#         fold_val_ends[-1] = min(fold_val_ends[-1], pretest_end)
+#         fold_val_starts[-1] = max(0, fold_val_ends[-1] - val_len)
+#
+#     # final small validation slice (for calibration before test)
+#     final_val_len = max(1, val_len)
+#     final_val_start = max(0, test_start - final_val_len)
+#     X_train_final = X.iloc[:final_val_start]
+#     y_train_final = y.iloc[:final_val_start]
+#     X_val_final   = X.iloc[final_val_start:test_start]
+#     y_val_final   = y.iloc[final_val_start:test_start]
+#
+#     # ---------------- param spaces ----------------
+#     xgb_param_grid = {'n_estimators':[200],'max_depth':[5],'learning_rate':[0.1],'subsample':[0.7],
+#                       'colsample_bytree':[1.0],'min_child_weight':[5],'reg_lambda':[1.0]}
+#     xgb_param_distributions = {'n_estimators':_randint(100,1001),'max_depth':_randint(3,8),
+#                                'learning_rate':_loguniform(0.01,0.2),'min_child_weight':_randint(3,13),
+#                                'subsample':_uniform(0.7,0.3),'colsample_bytree':_uniform(0.6,0.4),
+#                                'reg_lambda':_loguniform(0.1,10.0)}
+#     mlp_param_grid = {'hidden_layer_sizes':[(128,),(256,),(128,64)],'alpha':[1e-4],
+#                       'learning_rate_init':[1e-3],'batch_size':['auto'],'max_iter':[200]}
+#     mlp_param_distributions = {'hidden_layer_sizes':[(64,),(128,),(256,),(128,64),(256,128)],
+#                                'alpha':_loguniform(1e-5,1e-2),'learning_rate_init':_loguniform(5e-4,5e-2),
+#                                'batch_size':_randint(32,257),'max_iter':_randint(150,401)}
+#
+#     def cast_params(p: dict) -> dict:
+#         q = dict(p)
+#         if base_model == "xgb":
+#             for k in ['n_estimators','max_depth','min_child_weight']:
+#                 if k in q: q[k] = _as_int(q[k])
+#             for k in ['learning_rate','subsample','colsample_bytree','reg_lambda']:
+#                 if k in q: q[k] = _as_float(q[k])
+#         else:
+#             if 'max_iter' in q: q['max_iter'] = _as_int(q['max_iter'])
+#             if 'batch_size' in q and q['batch_size'] != 'auto': q['batch_size'] = _as_int(q['batch_size'])
+#             if 'alpha' in q: q['alpha'] = _as_float(q['alpha'])
+#             if 'learning_rate_init' in q: q['learning_rate_init'] = _as_float(q['learning_rate_init'])
+#             if 'hidden_layer_sizes' in q:
+#                 h = q['hidden_layer_sizes']
+#                 if isinstance(h, str):
+#                     parts = [pp.strip() for pp in h.strip("()").split(",") if pp.strip()!='']
+#                     q['hidden_layer_sizes'] = tuple(_as_int(pp) for pp in parts) if parts else (128,)
+#                 elif isinstance(h, (list, tuple, np.ndarray)):
+#                     q['hidden_layer_sizes'] = tuple(int(v) for v in h)
+#                 else:
+#                     q['hidden_layer_sizes'] = (int(h),)
+#         return q
+#
+#     def _final_step_name(estimator):
+#         try:
+#             if isinstance(estimator, Pipeline): return estimator.steps[-1][0]
+#         except Exception:
+#             pass
+#         return None
+#
+#     def build_model(params: dict, spw: float):
+#         model_seed = _seed_from("model", base_model, tuple(sorted(params.items())))
+#         if base_model == "xgb":
+#             return xgb.XGBClassifier(
+#                 objective='binary:logistic',
+#                 eval_metric='auc',
+#                 random_state=model_seed,
+#                 scale_pos_weight=spw,
+#                 n_jobs=1,
+#                 tree_method="hist",
+#                 verbosity=0,
+#                 **params
+#             )
+#         else:
+#             mlp = MLPClassifier(
+#                 random_state=model_seed,
+#                 early_stopping=True,
+#                 n_iter_no_change=20,
+#                 validation_fraction=0.1,
+#                 solver="adam",
+#                 **params
+#             )
+#             return make_pipeline(StandardScaler(with_mean=True, with_std=True), mlp)
+#
+#     def fit_model(model, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None):
+#         if base_model == "xgb":
+#             try:
+#                 model.set_params(verbosity=0, early_stopping_rounds=50)
+#                 if X_va is not None and y_va is not None:
+#                     model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
+#                 else:
+#                     model.fit(X_tr, y_tr, verbose=False)
+#             except Exception:
+#                 model.fit(X_tr, y_tr, verbose=False)
+#         else:
+#             fit_kwargs = {}
+#             if sample_weight is not None:
+#                 stepname = _final_step_name(model)
+#                 if stepname is not None:
+#                     fit_kwargs[f"{stepname}__sample_weight"] = sample_weight
+#             try:
+#                 model.fit(X_tr, y_tr, **fit_kwargs)
+#             except TypeError:
+#                 model.fit(X_tr, y_tr)
+#
+#     def fit_calibrator(fitted, X_va, y_va):
+#         try:
+#             from sklearn.calibration import FrozenEstimator
+#             frozen = FrozenEstimator(fitted)
+#             cal = CalibratedClassifierCV(frozen, method='sigmoid', cv=None)
+#             cal.fit(X_va, y_va)
+#             return cal
+#         except Exception:
+#             try:
+#                 cal = CalibratedClassifierCV(fitted, method='sigmoid', cv='prefit')
+#                 cal.fit(X_va, y_va); return cal
+#             except Exception:
+#                 return fitted
+#
+#     def _unwrap_estimator(est):
+#         if isinstance(est, Pipeline): return est.steps[-1][1]
+#         return est
+#
+#     def predict_proba_pos(model_or_cal, X_):
+#         proba = model_or_cal.predict_proba(X_)
+#         if proba.ndim == 2:
+#             classes = getattr(model_or_cal, "classes_", None)
+#             if classes is None:
+#                 base = _unwrap_estimator(model_or_cal); classes = getattr(base, "classes_", None)
+#             if classes is not None and len(classes) == proba.shape[1]:
+#                 try:
+#                     idx = int(np.where(np.asarray(classes) == 1)[0][0])
+#                     return proba[:, idx].astype(np.float32)
+#                 except Exception:
+#                     pass
+#             if proba.shape[1] == 2: return proba[:, 1].astype(np.float32)
+#             if proba.shape[1] == 1:
+#                 only = getattr(model_or_cal, "classes_", [0])[0]
+#                 return (np.ones_like(proba[:,0]) if only==1 else np.zeros_like(proba[:,0])).astype(np.float32)
+#         return np.asarray(proba, dtype=np.float32)
+#
+#     # --- p-value helper (commission-adjusted) ------------------------------
+#     def _pvalue_break_even(bdf: pd.DataFrame, mode: str) -> dict:
+#         if not isinstance(bdf, pd.DataFrame) or bdf.empty:
+#             return {'z': 0.0, 'p_value': 1.0, 'var_sum': 0.0, 'n': 0, 'total_pl': 0.0}
+#         o = np.asarray(bdf['market_odds'].values, dtype=float)
+#         o = np.where(o <= 1.0, np.nan, o)
+#         p = 1.0 / o  # null win prob
+#         if mode == 'VALUE_BACK':
+#             S = np.asarray(bdf['stake'].values, dtype=float)
+#             win = (o - 1.0) * S * (1.0 - commission_rate)
+#             lose = -S
+#         else:  # VALUE_LAY
+#             L = np.asarray(bdf.get('liability', np.nan*np.ones_like(o))).astype(float)
+#             stake = np.asarray(bdf['stake'].values, dtype=float)
+#             win  = stake * (1.0 - commission_rate)   # selection loses
+#             lose = -L                                 # selection wins
+#         var_i = p * (win ** 2) + (1.0 - p) * (lose ** 2)
+#         var_i = np.where(np.isfinite(var_i), var_i, 0.0)
+#         pl = np.asarray(bdf['pl'].values, dtype=float)
+#         total_pl = float(np.nansum(np.where(np.isfinite(pl), pl, 0.0)))
+#         var_sum = float(np.nansum(var_i))
+#         z = total_pl / (np.sqrt(var_sum) + 1e-12)
+#         p_val = max(0.0, 1.0 - _Phi(z))  # one-sided
+#         return {'z': float(z), 'p_value': float(p_val), 'var_sum': var_sum, 'n': int(len(pl)), 'total_pl': total_pl}
+#
+#     def _pvalue_break_even_lay_variant(mkt_odds, stake, liability, sel_wins):
+#         bdf = pd.DataFrame({
+#             'market_odds': mkt_odds,
+#             'stake': stake,
+#             'liability': liability,
+#             'pl': np.where(sel_wins, -liability, stake * (1.0 - commission_rate)),
+#         })
+#         return _pvalue_break_even(bdf, mode='VALUE_LAY')
+#
+#     def _lay_stakes(odds: np.ndarray, fair_over_market_minus1: np.ndarray, plan: str):
+#         o = np.asarray(odds, dtype=float)
+#         edge_plus = np.maximum(np.asarray(fair_over_market_minus1, dtype=float), 0.0)
+#         denom = np.maximum(o - 1.0, 1e-12)
+#
+#         def _apply_joint_bounds_from_stake(stake_desired: np.ndarray):
+#             stake_min_joint = np.maximum(float(min_lay_stake), float(min_lay_liability) / denom)
+#             stake_max_joint = np.minimum(float(max_lay_stake), float(max_lay_liability) / denom)
+#             stake = np.clip(stake_desired, stake_min_joint, stake_max_joint)
+#             L = stake * denom
+#             return stake, L
+#
+#         def _apply_joint_bounds_from_liability(L_desired: np.ndarray):
+#             L_min_joint = np.maximum(float(min_lay_liability), float(min_lay_stake) * denom)
+#             L_max_joint = np.minimum(float(max_lay_liability), float(max_lay_stake) * denom)
+#             L = np.clip(L_desired, L_min_joint, L_max_joint)
+#             stake = L / denom
+#             return stake, L
+#
+#         if plan == "liability":
+#             L_desired = np.full_like(o, float(liability_test), dtype=float)
+#             stake, L = _apply_joint_bounds_from_liability(L_desired)
+#         elif plan == "flat_stake":
+#             stake_desired = np.full_like(o, float(lay_flat_stake), dtype=float)
+#             stake, L = _apply_joint_bounds_from_stake(stake_desired)
+#         elif plan == "edge_prop":
+#             scale = max(1e-12, float(lay_edge_scale))
+#             L_desired = float(liability_test) * (edge_plus / scale)
+#             stake, L = _apply_joint_bounds_from_liability(L_desired)
+#         elif plan == "kelly_approx":
+#             L_desired = float(liability_test) * float(kelly_fraction_lay) * edge_plus
+#             stake, L = _apply_joint_bounds_from_liability(L_desired)
+#         else:
+#             raise ValueError(f"Unknown staking_plan_lay: {plan}")
+#
+#         stake = np.where(np.isfinite(stake), np.maximum(stake, 0.0), 0.0)
+#         L = np.where(np.isfinite(L), np.maximum(L, 0.0), 0.0)
+#         return stake, L
+#
+#     def _back_stakes(odds: np.ndarray, fair_over_market_minus1: np.ndarray, plan: str, p_win: np.ndarray):
+#         o = np.asarray(odds, dtype=float)
+#         p = np.clip(np.asarray(p_win, dtype=float), 0.0, 1.0)
+#         edge_plus = np.maximum(fair_over_market_minus1, 0.0)
+#         if plan == "flat":
+#             stake = np.full_like(o, float(back_stake_test), dtype=float)
+#         elif plan == "edge_prop":
+#             stake = float(back_stake_test) * np.divide(edge_plus, max(1e-9, float(back_edge_scale)))
+#         elif plan == "kelly":
+#             b = np.maximum(o - 1.0, 1e-9)
+#             f = (b * p - (1.0 - p)) / b
+#             f = np.maximum(f, 0.0)
+#             stake = float(bankroll_back) * float(kelly_fraction_back) * f
+#         else:
+#             raise ValueError(f"Unknown staking_plan_back: {plan}")
+#         stake = np.clip(stake, float(min_back_stake), float(max_back_stake))
+#         return stake
+#
+#     # ---------------- search space ----------------
+#     if search_mode.lower() == "grid":
+#         grid = xgb_param_grid if base_model == "xgb" else mlp_param_grid
+#         all_param_dicts = [dict(zip(grid.keys(), combo)) for combo in product(*grid.values())]
+#     else:
+#         dists = xgb_param_distributions if base_model == "xgb" else mlp_param_distributions
+#         sampler_seed = _seed_from("sampler")
+#         all_param_dicts = list(ParameterSampler(dists, n_iter=n_random_param_sets, random_state=sampler_seed))
+#
+#     # ---------------- validation eval ----------------
+#     def evaluate_param_set(param_dict, *_):
+#         safe = cast_params(param_dict)
+#         rows = []; val_prob_all=[]; val_true_all=[]
+#
+#         for vstart, vend in zip(fold_val_starts, fold_val_ends):
+#             if vstart is None or vend is None or vstart <= 0 or vend <= vstart: continue
+#             X_tr, y_tr = X.iloc[:vstart], y.iloc[:vstart]
+#             X_va, y_va = X.iloc[vstart:vend], y.iloc[vstart:vend]
+#             df_va = df.iloc[vstart:vend]
+#             if y_tr.nunique() < 2: continue
+#
+#             pos = int(y_tr.sum()); neg = len(y_tr) - pos
+#             spw = (neg/pos) if pos > 0 else 1.0
+#
+#             sample_weight = None
+#             if base_model == "mlp":
+#                 w_pos = spw
+#                 sample_weight = np.where(y_tr.values==1, w_pos, 1.0).astype(np.float32)
+#
+#             model = build_model(safe, spw)
+#             fit_model(model, X_tr, y_tr, X_va, y_va, sample_weight=sample_weight)
+#             cal = fit_calibrator(model, X_va, y_va)
+#
+#             p_pos = predict_proba_pos(cal, X_va)
+#             val_prob_all.append(p_pos)
+#             y_true = y_va.values.astype(np.uint8); val_true_all.append(y_true)
+#
+#             if _IS_CLASSIFY:
+#                 if classify_odds_column is None or classify_odds_column not in df_va.columns:
+#                     for thr in thresholds:
+#                         thr = float(thr)
+#                         take = (p_pos >= thr) if classify_side == "back" else (p_pos <= (1.0 - thr))
+#                         y_pred = (take).astype(np.uint8)
+#                         n_preds = int(y_pred.sum())
+#                         tp = int(((y_true == 1) & (y_pred == 1)).sum())
+#                         fp = int(((y_true == 0) & (y_pred == 1)).sum())
+#                         prc = precision_score(y_va, y_pred, zero_division=0)
+#                         acc = accuracy_score(y_va, y_pred)
+#                         rows.append({
+#                             **safe,
+#                             'threshold': thr,
+#                             'odds_min': np.nan, 'odds_max': np.nan,
+#                             'fold_vstart': int(vstart),
+#                             'fold_vend': int(vend),
+#                             'n_preds_val': n_preds,
+#                             'tp_val': tp,
+#                             'fp_val': fp,
+#                             'val_precision': float(prc),
+#                             'val_accuracy': float(acc),
+#                             'n_value_bets_val': n_preds,
+#                             'val_edge_ratio_mean': np.nan,
+#                             'val_edge_ratio_mean_back': np.nan,
+#                         })
+#                 else:
+#                     mkt = df_va[classify_odds_column].values.astype(float)
+#                     valid = np.isfinite(mkt) & (mkt > 1.01)
+#                     for thr in thresholds:
+#                         thr = float(thr)
+#                         pred_mask = (p_pos >= thr) if classify_side == "back" else (p_pos <= (1.0 - thr))
+#                         for omin in classify_odds_min_grid:
+#                             for omax in classify_odds_max_grid:
+#                                 omin = float(omin); omax = float(omax)
+#                                 if omin > omax: continue
+#                                 odds_mask = valid & (mkt >= omin) & (mkt <= omax)
+#                                 take = pred_mask & odds_mask
+#                                 y_pred = take.astype(np.uint8)
+#                                 n_preds = int(y_pred.sum())
+#                                 tp = int(((y_true == 1) & (y_pred == 1)).sum())
+#                                 fp = int(((y_true == 0) & (y_pred == 1)).sum())
+#                                 prc = precision_score(y_va, y_pred, zero_division=0)
+#                                 acc = accuracy_score(y_va, y_pred)
+#                                 rows.append({
+#                                     **safe,
+#                                     'threshold': thr,
+#                                     'odds_min': omin, 'odds_max': omax,
+#                                     'fold_vstart': int(vstart),
+#                                     'fold_vend': int(vend),
+#                                     'n_preds_val': n_preds,
+#                                     'tp_val': tp,
+#                                     'fp_val': fp,
+#                                     'val_precision': float(prc),
+#                                     'val_accuracy': float(acc),
+#                                     'n_value_bets_val': n_preds,
+#                                     'val_edge_ratio_mean': np.nan,
+#                                     'val_edge_ratio_mean_back': np.nan,
+#                                 })
+#             else:
+#                 # VALUE modes
+#                 if _IS_LAY:
+#                     mkt = df_va['away_odds'].values if market=="LAY_AWAY" else (df_va['home_odds'].values if market=="LAY_HOME" else df_va['draw_odds'].values)
+#                     p_sel_win = 1.0 - p_pos
+#                     fair = np.divide(1.0, np.clip(p_sel_win, 1e-9, 1.0))
+#                 else:
+#                     mkt = df_va['away_odds'].values if market=="BACK_AWAY" else (df_va['home_odds'].values if market=="BACK_HOME" else df_va['draw_odds'].values)
+#                     p_sel_win = p_pos
+#                     fair = np.divide(1.0, np.clip(p_sel_win, 1e-9, 1.0))
+#                 edge_grid = value_edge_grid_lay if _IS_LAY else value_edge_grid_back
+#                 for edge_param in edge_grid:
+#                     if _IS_LAY:
+#                         edge_mask = (fair >= (1.0 + float(edge_param)) * mkt) & np.isfinite(mkt)
+#                         with np.errstate(divide='ignore', invalid='ignore'):
+#                             edge_ratio = fair / mkt
+#                         val_edge_mean = float(np.nanmean(np.where(np.isfinite(edge_ratio), edge_ratio, np.nan)))
+#                     else:
+#                         edge_mask = (mkt >= (1.0 + float(edge_param)) * fair) & np.isfinite(mkt)
+#                         with np.errstate(divide='ignore', invalid='ignore'):
+#                             edge_ratio = mkt / fair
+#                         val_edge_mean = float(np.nanmean(np.where(np.isfinite(edge_ratio), edge_ratio, np.nan)))
+#                     y_pred = edge_mask.astype(np.uint8)
+#                     tp = int(((y_true == 1) & (y_pred == 1)).sum())
+#                     fp = int(((y_true == 0) & (y_pred == 1)).sum())
+#                     prc = precision_score(y_true, y_pred, zero_division=0)
+#                     acc = accuracy_score(y_true, y_pred)
+#                     rows.append({
+#                         **safe,
+#                         'threshold': np.nan,
+#                         'odds_min': np.nan, 'odds_max': np.nan,
+#                         'edge_param': float(edge_param),
+#                         'fold_vstart': int(vstart),
+#                         'fold_vend': int(vend),
+#                         'n_preds_val': int(y_pred.sum()),
+#                         'tp_val': tp,
+#                         'fp_val': fp,
+#                         'val_precision': float(prc),
+#                         'val_accuracy': float(acc),
+#                         'n_value_bets_val': int(y_pred.sum()),
+#                         'val_edge_ratio_mean': val_edge_mean if _IS_LAY else np.nan,
+#                         'val_edge_ratio_mean_back': val_edge_mean if _IS_BACK else np.nan,
+#                     })
+#
+#         # pooled diagnostics
+#         if val_prob_all:
+#             vp = np.concatenate(val_prob_all, axis=0)
+#             vt = np.concatenate(val_true_all, axis=0)
+#             try: val_auc = float(roc_auc_score(vt, vp))
+#             except Exception: val_auc = np.nan
+#             try: val_ll  = float(log_loss(vt, vp, labels=[0, 1]))
+#             except Exception: val_ll = np.nan
+#             try: val_bri = float(brier_score_loss(vt, vp))
+#             except Exception: val_bri = np.nan
+#         else:
+#             val_auc = val_ll = val_bri = np.nan
+#
+#         for r in rows:
+#             r['val_auc'] = val_auc
+#             r['val_logloss'] = val_ll
+#             r['val_brier'] = val_bri
+#
+#         return rows
+#
+#     # ---------------- search ----------------
+#     if base_model == "mlp":
+#         eff_jobs = min(max(1, cpu_jobs), 4); prefer = "threads"; backend = "threading"; pre_dispatch = eff_jobs
+#         ctx = parallel_backend(backend, n_jobs=eff_jobs)
+#     else:
+#         eff_jobs = max(1, min(cpu_jobs, 4)) if cpu_jobs != -1 else 4
+#         prefer = "processes"; backend = "loky"; pre_dispatch = f"{2*eff_jobs}"
+#         ctx = parallel_backend(backend, n_jobs=eff_jobs, inner_max_num_threads=1)
+#
+#     with ctx:
+#         try:
+#             with tqdm_joblib(tqdm(total=len(all_param_dicts), desc=f"Param search ({search_mode}, {base_model})")) as _:
+#                 out = Parallel(n_jobs=eff_jobs, batch_size=1, prefer=prefer, pre_dispatch=pre_dispatch)(
+#                     delayed(evaluate_param_set)(pd_) for pd_ in all_param_dicts
+#                 )
+#         except OSError as e:
+#             print(f"[WARN] Parallel failed with {e}. Falling back to serial search...")
+#             out = []
+#             for pd_ in tqdm(all_param_dicts, desc=f"Param search (serial, {base_model})"):
+#                 out.append(evaluate_param_set(pd_))
+#
+#     val_rows = [r for sub in out for r in sub]
+#     if not val_rows: raise RuntimeError("No validation rows produced (check folds and input data).")
+#     val_df = pd.DataFrame(val_rows)
+#
+#     # ---------------- validation aggregate ----------------
+#     if base_model == "xgb":
+#         param_keys = ['n_estimators','max_depth','learning_rate','subsample','colsample_bytree','min_child_weight','reg_lambda']
+#     else:
+#         param_keys = ['hidden_layer_sizes','alpha','learning_rate_init','batch_size','max_iter']
+#
+#     if _IS_CLASSIFY:
+#         if (classify_odds_column is not None) and (classify_odds_column in df.columns):
+#             group_cols = param_keys + ['threshold','odds_min','odds_max']
+#         else:
+#             group_cols = param_keys + ['threshold']
+#     else:
+#         group_cols = param_keys + ['edge_param']
+#
+#     agg_dict = {
+#         'n_preds_val': 'sum',
+#         'tp_val': 'sum',
+#         'fp_val': 'sum',
+#         'val_precision': 'mean',
+#         'val_accuracy': 'mean',
+#         'val_auc': 'mean',
+#         'val_logloss': 'mean',
+#         'val_brier': 'mean',
+#         'n_value_bets_val': 'sum',
+#     }
+#     if 'val_edge_ratio_mean' in val_df.columns: agg_dict['val_edge_ratio_mean'] = 'mean'
+#     if 'val_edge_ratio_mean_back' in val_df.columns: agg_dict['val_edge_ratio_mean_back'] = 'mean'
+#
+#     agg = val_df.groupby(group_cols, as_index=False).agg(agg_dict)
+#     agg['val_precision_pooled'] = agg.apply(lambda r: (r['tp_val'] / max(1, (r['tp_val'] + r['fp_val']))), axis=1)
+#     agg['val_precision_lcb'] = agg.apply(lambda r: _wilson_lcb(int(r['tp_val']), int(r['fp_val']), conf=val_conf_level), axis=1)
+#
+#     qual_mask = (
+#         (agg['val_precision'] >= float(precision_test_threshold)) &
+#         (agg['n_preds_val'] >= int(min_samples))
+#     )
+#     if _USE_VALUE_LAY or _USE_VALUE_BACK:
+#         qual_mask &= (agg['n_value_bets_val'] >= int(min_samples))
+#     qual = agg[qual_mask].copy()
+#
+#     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#     if qual.empty:
+#         fail_csv = None
+#         if save_diagnostics_on_fail:
+#             diag = (agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+#                                     ascending=[False, False, False, False])
+#                     .assign(fail_reason="failed_validation_gate", market=market))
+#             fail_csv = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}_FAILED.csv")
+#             os.makedirs(csv_save_dir, exist_ok=True); diag.to_csv(fail_csv, index=False)
+#         msg = "No strategy met validation gates."
+#         if on_fail == "raise": raise RuntimeError(msg)
+#         if on_fail == "warn": print("[WARN]", msg)
+#         return {'status':'failed_validation_gate','csv':fail_csv,'model_pkl':None,
+#                 'summary_df':None,'validation_table':agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+#                 ascending=[False,False,False,False]).reset_index(drop=True)}
+#
+#     ranked = qual.sort_values(by=['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+#                               ascending=[False, False, False, False]).reset_index(drop=True)
+#     topk_val = ranked.head(top_k).reset_index(drop=True)
+#
+#     def _extract_params_from_row(row):
+#         return cast_params({k: row[k] for k in param_keys if k in row.index})
+#
+#     candidates = []
+#     for _, row in topk_val.iterrows():
+#         c = {
+#             'params': _extract_params_from_row(row),
+#             'val_precision': float(row['val_precision']),
+#             'val_precision_lcb': float(row['val_precision_lcb']),
+#             'val_accuracy': float(row['val_accuracy']),
+#             'n_preds_val': int(row['n_preds_val']),
+#         }
+#         if _IS_CLASSIFY:
+#             c['threshold'] = float(row['threshold'])
+#             c['odds_min'] = float(row['odds_min']) if 'odds_min' in row.index else np.nan
+#             c['odds_max'] = float(row['odds_max']) if 'odds_max' in row.index else np.nan
+#         else:
+#             c['edge_param'] = float(row['edge_param'])
+#         candidates.append(c)
+#
+#     # ---------------- test eval ----------------
+#     records_all = []
+#     all_bets_collector = []
+#
+#     def _name_cols(subdf):
+#         cols = {}
+#         for c in ['date','league','country','home_team','away_team','match_id']:
+#             if c in subdf.columns: cols[c] = subdf[c].values
+#         if {'home_team','away_team'}.issubset(subdf.columns):
+#             cols['event_name'] = (subdf['home_team'] + ' v ' + subdf['away_team']).values
+#         return cols
+#
+#     for cand_id, cand in enumerate(candidates):
+#         best_params = cast_params(cand['params'])
+#         pos = int(y_train_final.sum()); neg = len(y_train_final) - pos
+#         spw_final = (neg/pos) if pos > 0 else 1.0
+#
+#         final_model = build_model(best_params, spw_final)
+#         final_sample_weight = None
+#         if base_model == "mlp":
+#             w_pos = spw_final
+#             final_sample_weight = np.where(y_train_final.values==1, w_pos, 1.0).astype(np.float32)
+#
+#         fit_model(final_model, X_train_final, y_train_final, X_val_final, y_val_final, sample_weight=final_sample_weight)
+#         final_calibrator = fit_calibrator(final_model, X_val_final, y_val_final)
+#         p_pos_test = predict_proba_pos(final_calibrator, X_test)
+#
+#         if _USE_VALUE:
+#             # ===== VALUE modes (unchanged) =====
+#             if _IS_LAY:
+#                 if market == "LAY_AWAY":
+#                     p_sel_win = 1.0 - p_pos_test; mkt_odds = df_test['away_odds'].values; sel_name = 'AWAY'
+#                 elif market == "LAY_HOME":
+#                     p_sel_win = 1.0 - p_pos_test; mkt_odds = df_test['home_odds'].values; sel_name = 'HOME'
+#                 else:
+#                     p_sel_win = 1.0 - p_pos_test; mkt_odds = df_test['draw_odds'].values; sel_name = 'DRAW'
+#                 fair_odds = np.divide(1.0, np.clip(p_sel_win, 1e-9, 1.0))
+#                 valid = np.isfinite(mkt_odds) & (mkt_odds > 1.01)
+#                 edge = float(cand.get('edge_param', 0.0))
+#                 edge_mask = valid & (fair_odds >= (1.0 + edge) * mkt_odds)
+#                 with np.errstate(divide='ignore', invalid='ignore'):
+#                     edge_ratio_minus1 = np.where(mkt_odds > 0, fair_odds / mkt_odds - 1.0, 0.0)
+#
+#                 for plan in staking_plan_lay_options:
+#                     stake = np.zeros_like(mkt_odds, dtype=float)
+#                     liability = np.zeros_like(mkt_odds, dtype=float)
+#                     s, L = _lay_stakes(mkt_odds, edge_ratio_minus1, plan)
+#                     stake[edge_mask] = s[edge_mask]; liability[edge_mask] = L[edge_mask]
+#
+#                     sel_wins = (y_test.values == 0)
+#                     pl = np.zeros_like(stake)
+#                     idx_win = (stake > 0) & (~sel_wins)
+#                     idx_lose = (stake > 0) & (sel_wins)
+#                     pl[idx_win]  = stake[idx_win] * (1.0 - commission_rate)
+#                     pl[idx_lose] = -liability[idx_lose]
+#
+#                     n_bets = int(np.count_nonzero(stake > 0))
+#                     total_pl = float(pl.sum()); avg_pl = float(total_pl / max(1, n_bets))
+#
+#                     lays_as_preds = (stake > 0).astype(np.uint8)
+#                     prc_test = precision_score(y_test, lays_as_preds, zero_division=0)
+#                     acc_test = accuracy_score(y_test, lays_as_preds)
+#
+#                     bet_idx = np.where(stake > 0)[0]
+#                     name_cols = _name_cols(df_test.iloc[bet_idx])
+#                     bets_df = pd.DataFrame({
+#                         **name_cols,
+#                         'selection': sel_name,
+#                         'market_odds': mkt_odds[bet_idx],
+#                         'fair_odds': fair_odds[bet_idx],
+#                         'edge_ratio': np.where(mkt_odds[bet_idx] > 0, fair_odds[bet_idx] / mkt_odds[bet_idx], np.nan),
+#                         'liability': liability[bet_idx],
+#                         'stake': stake[bet_idx],
+#                         'commission_rate': float(commission_rate),
+#                         'selection_won': sel_wins[bet_idx].astype(int),
+#                         'target': y_test.values[bet_idx],
+#                         'pl': pl[bet_idx],
+#                     })
+#                     if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                     bets_df['cum_pl'] = bets_df['pl'].cumsum()
+#
+#                     pv = _pvalue_break_even(bets_df, mode='VALUE_LAY')
+#                     enough = n_bets >= int(min_test_samples)
+#                     not_collapsed = prc_test >= max(float(precision_test_threshold), float(cand['val_precision']) - float(max_precision_drop))
+#                     pass_gate = bool(enough and not_collapsed)
+#                     reason = "" if pass_gate else ("insufficient_test_bets" if not enough else "precision_collapse")
+#
+#                     if len(bets_df):
+#                         meta = {
+#                             'candidate_id': cand_id,'passed_test_gate': bool(pass_gate),'mode': 'VALUE_LAY','market': market,
+#                             'threshold': np.nan,'edge_param': edge,'staking_plan_lay': plan,
+#                             'val_precision': float(cand['val_precision']),'val_precision_lcb': float(cand['val_precision_lcb']),
+#                             'n_value_bets_test': int(n_bets),'total_pl': float(total_pl),'avg_pl': float(avg_pl),
+#                             'p_value': pv['p_value'],'zscore': pv['z'],'commission_rate': float(commission_rate),
+#                             'params_json': json.dumps(best_params, default=float),
+#                         }
+#                         bdf = bets_df.copy()
+#                         for k, v in meta.items(): bdf[k] = v
+#                         all_bets_collector.append(bdf)
+#
+#                     records_all.append({
+#                         **best_params, 'threshold': np.nan, 'odds_min': np.nan, 'odds_max': np.nan, 'edge_param': edge,
+#                         'val_precision_lcb': cand['val_precision_lcb'], 'val_precision': cand['val_precision'],
+#                         'val_accuracy': cand['val_accuracy'],
+#                         'n_value_bets_test': n_bets, 'test_precision_bets': float(prc_test),
+#                         'test_accuracy_bets': float(acc_test), 'total_pl': total_pl, 'avg_pl': avg_pl,
+#                         'p_value': pv['p_value'], 'zscore': pv['z'],
+#                         'pass_test_gate': pass_gate, 'fail_reason': reason, 'model_obj': final_calibrator if pass_gate else None,
+#                         'mode': 'VALUE_LAY', 'bets': bets_df if pass_gate else None,
+#                         'staking_plan_lay': plan,'commission_rate': float(commission_rate),
+#                     })
+#
+#             else:  # VALUE BACK
+#                 if market == "BACK_AWAY":
+#                     p_sel_win = p_pos_test; mkt_odds = df_test['away_odds'].values; sel_name = 'AWAY'
+#                 elif market == "BACK_HOME":
+#                     p_sel_win = p_pos_test; mkt_odds = df_test['home_odds'].values; sel_name = 'HOME'
+#                 else:
+#                     p_sel_win = p_pos_test; mkt_odds = df_test['draw_odds'].values; sel_name = 'DRAW'
+#                 fair_odds = np.divide(1.0, np.clip(p_sel_win, 1.0e-9, 1.0))
+#                 valid = np.isfinite(mkt_odds) & (mkt_odds > 1.01)
+#                 edge = float(cand.get('edge_param', 0.0))
+#                 edge_mask = valid & (mkt_odds >= (1.0 + edge) * fair_odds)
+#                 with np.errstate(divide='ignore', invalid='ignore'):
+#                     edge_ratio_minus1 = np.where(fair_odds > 0, mkt_odds / fair_odds - 1.0, 0.0)
+#
+#                 for plan in staking_plan_back_options:
+#                     stake = np.zeros_like(mkt_odds, dtype=float)
+#                     s = _back_stakes(mkt_odds, edge_ratio_minus1, plan, p_sel_win)
+#                     stake[edge_mask] = s[edge_mask]
+#
+#                     sel_wins = (y_test.values == 1)
+#                     pl = np.zeros_like(stake)
+#                     win_idx = (stake > 0) & sel_wins
+#                     lose_idx = (stake > 0) & (~sel_wins)
+#                     pl[win_idx]  = (mkt_odds[win_idx] - 1.0) * stake[win_idx] * (1.0 - commission_rate)
+#                     pl[lose_idx] = -stake[lose_idx]
+#
+#                     n_bets = int(np.count_nonzero(stake > 0))
+#                     total_pl = float(pl.sum()); avg_pl = float(total_pl / max(1, n_bets))
+#
+#                     backs_as_preds = (stake > 0).astype(np.uint8)
+#                     prc_test = precision_score(y_test, backs_as_preds, zero_division=0)
+#                     acc_test = accuracy_score(y_test, backs_as_preds)
+#
+#                     bet_idx = np.where(stake > 0)[0]
+#                     name_cols = _name_cols(df_test.iloc[bet_idx])
+#                     bets_df = pd.DataFrame({
+#                         **name_cols,
+#                         'selection': sel_name,
+#                         'market_odds': mkt_odds[bet_idx],
+#                         'fair_odds': fair_odds[bet_idx],
+#                         'edge_ratio': np.where(fair_odds[bet_idx] > 0, mkt_odds[bet_idx] / fair_odds[bet_idx], np.nan),
+#                         'stake': stake[bet_idx],
+#                         'commission_rate': float(commission_rate),
+#                         'selection_won': sel_wins[bet_idx].astype(int),
+#                         'target': y_test.values[bet_idx],
+#                         'pl': pl[bet_idx],
+#                     })
+#                     if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                     bets_df['cum_pl'] = bets_df['pl'].cumsum()
+#
+#                     pv = _pvalue_break_even(bets_df, mode='VALUE_BACK')
+#                     enough = n_bets >= int(min_test_samples)
+#                     not_collapsed = prc_test >= max(float(precision_test_threshold), float(cand['val_precision']) - float(max_precision_drop))
+#                     pass_gate = bool(enough and not_collapsed)
+#                     reason = "" if pass_gate else ("insufficient_test_bets" if not enough else "precision_collapse")
+#
+#                     if len(bets_df):
+#                         meta = {
+#                             'candidate_id': cand_id,'passed_test_gate': bool(pass_gate),'mode': 'VALUE_BACK','market': market,
+#                             'threshold': np.nan,'edge_param': edge,'staking_plan_back': plan,
+#                             'val_precision': float(cand['val_precision']),'val_precision_lcb': float(cand['val_precision_lcb']),
+#                             'n_value_bets_test': int(n_bets),'total_pl': float(total_pl),'avg_pl': float(avg_pl),
+#                             'p_value': pv['p_value'],'zscore': pv['z'],'commission_rate': float(commission_rate),
+#                             'params_json': json.dumps(best_params, default=float),
+#                         }
+#                         bdf = bets_df.copy()
+#                         for k, v in meta.items(): bdf[k] = v
+#                         all_bets_collector.append(bdf)
+#
+#                     records_all.append({
+#                         **best_params, 'threshold': np.nan, 'odds_min': np.nan, 'odds_max': np.nan, 'edge_param': edge,
+#                         'val_precision_lcb': cand['val_precision_lcb'], 'val_precision': cand['val_precision'],
+#                         'val_accuracy': cand['val_accuracy'],
+#                         'n_value_bets_test': n_bets, 'test_precision_bets': float(prc_test),
+#                         'test_accuracy_bets': float(acc_test), 'total_pl': total_pl, 'avg_pl': avg_pl,
+#                         'p_value': pv['p_value'], 'zscore': pv['z'],
+#                         'pass_test_gate': pass_gate, 'fail_reason': reason, 'model_obj': final_calibrator if pass_gate else None,
+#                         'mode': 'VALUE_BACK', 'bets': bets_df if pass_gate else None,
+#                         'staking_plan_back': plan,'commission_rate': float(commission_rate),
+#                     })
+#
+#         else:
+#             # ===== CLASSIFY TEST EVAL with odds band & bet side =====
+#             thr = float(cand['threshold'])
+#             if (classify_odds_column is not None) and (classify_odds_column in df_test.columns):
+#                 o = df_test[classify_odds_column].values.astype(float)
+#                 valid = np.isfinite(o) & (o > 1.01)
+#                 omin = cand.get('odds_min', np.nan); omax = cand.get('odds_max', np.nan)
+#                 if np.isnan(omin) or np.isnan(omax):
+#                     odds_mask = valid
+#                     omin, omax = np.nan, np.nan
+#                 else:
+#                     odds_mask = valid & (o >= float(omin)) & (o <= float(omax))
+#             else:
+#                 o = None
+#                 odds_mask = np.ones(len(X_test), dtype=bool)
+#                 omin = np.nan; omax = np.nan
+#
+#             pred_mask = (p_pos_test >= thr) if classify_side == "back" else (p_pos_test <= (1.0 - thr))
+#             take = pred_mask & odds_mask
+#             y_pred = take.astype(np.uint8)
+#             n_preds_test = int(y_pred.sum())
+#             prc_test = precision_score(y_test, y_pred, zero_division=0)
+#             acc_test = accuracy_score(y_test, y_pred)
+#             enough = n_preds_test >= int(min_test_samples)
+#             not_collapsed = prc_test >= max(float(precision_test_threshold),
+#                                             float(cand['val_precision']) - float(max_precision_drop))
+#             pass_gate = bool(enough and not_collapsed)
+#             reason = "" if pass_gate else ("insufficient_test_preds" if not enough else "precision_collapse")
+#
+#             # Bet-level P/L + p-value
+#             bets_df = None
+#             total_pl = float('nan'); avg_pl = float('nan'); p_value = float('nan'); zscore = float('nan')
+#
+#             bet_idx = np.where(take)[0]
+#             if len(bet_idx):
+#                 name_cols = _name_cols(df_test.iloc[bet_idx])
+#                 sel_wins = (y_test.values[bet_idx] == 1)   # selection WON
+#
+#                 if o is not None:
+#                     mkt_odds = o[bet_idx].astype(float)
+#                     base_cols = {
+#                         **name_cols,
+#                         'selection': f'CLASSIFY_{classify_side.upper()}',
+#                         'market_odds': mkt_odds,
+#                         'threshold': thr,
+#                         'odds_min': omin, 'odds_max': omax,
+#                         'commission_rate': float(commission_rate),
+#                         'selection_won': sel_wins.astype(int),
+#                         'target': y_test.values[bet_idx],
+#                     }
+#
+#                     if classify_side == "back":
+#                         stake_flat = np.full(len(bet_idx), float(classify_stake), dtype=float)
+#                         pl_flat = np.zeros_like(stake_flat, dtype=float)
+#                         win_idx = sel_wins
+#                         lose_idx = ~sel_wins
+#                         pl_flat[win_idx]  = (mkt_odds[win_idx] - 1.0) * stake_flat[win_idx] * (1.0 - commission_rate)
+#                         pl_flat[lose_idx] = -stake_flat[lose_idx]
+#
+#                         bets_df = pd.DataFrame({
+#                             **base_cols,
+#                             'stake': stake_flat,
+#                             'pl': pl_flat,
+#                         })
+#                         if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                         bets_df['cum_pl'] = bets_df['pl'].cumsum()
+#
+#                         pv = _pvalue_break_even(bets_df[['market_odds','stake','pl']], mode='VALUE_BACK')
+#                         total_pl = float(bets_df['pl'].sum()); avg_pl = float(total_pl / max(1, len(bets_df)))
+#                         p_value = float(pv['p_value']); zscore = float(pv['z'])
+#
+#                     else:
+#                         # LAY CLASSIFY: evaluate BOTH variants
+#                         # A) Flat-stake variant
+#                         stake_flat = np.full(len(bet_idx), float(classify_lay_flat_stake), dtype=float)
+#                         liability_flat = stake_flat * (mkt_odds - 1.0)
+#                         pl_flat = np.where(sel_wins, -liability_flat, stake_flat * (1.0 - commission_rate))
+#                         pv_flat = _pvalue_break_even_lay_variant(mkt_odds, stake_flat, liability_flat, sel_wins)
+#
+#                         # B) Flat-liability variant
+#                         liability_const = np.full(len(bet_idx), float(classify_lay_liability), dtype=float)
+#                         denom = np.maximum(mkt_odds - 1.0, 1e-12)
+#                         stake_liab = liability_const / denom
+#                         pl_liab = np.where(sel_wins, -liability_const, stake_liab * (1.0 - commission_rate))
+#                         pv_liab = _pvalue_break_even_lay_variant(mkt_odds, stake_liab, liability_const, sel_wins)
+#
+#                         bets_df = pd.DataFrame({
+#                             **base_cols,
+#                             # Flat-stake variant
+#                             'stake_flat': stake_flat,
+#                             'liability_flat': liability_flat,
+#                             'pl_flat': pl_flat,
+#                             # Flat-liability variant
+#                             'stake_liability': stake_liab,
+#                             'liability_liability': liability_const,
+#                             'pl_liability': pl_liab,
+#                         })
+#                         if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                         bets_df['cum_pl_flat'] = bets_df['pl_flat'].cumsum()
+#                         bets_df['cum_pl_liability'] = bets_df['pl_liability'].cumsum()
+#                         # For plotting/back-compat: expose a 'cum_pl' using flat-stake
+#                         bets_df['cum_pl'] = bets_df['cum_pl_flat']
+#
+#                         # Legacy totals use the flat-stake variant (back-compat)
+#                         total_pl = float(np.sum(pl_flat))
+#                         avg_pl = float(total_pl / max(1, len(bets_df)))
+#                         p_value = float(pv_flat['p_value']); zscore = float(pv_flat['z'])
+#
+#                         # Attach aggregates for both variants (useful in CSV/summary)
+#                         bets_df.attrs['totals'] = {
+#                             'total_pl_flat': float(np.sum(pl_flat)),
+#                             'avg_pl_flat': float(np.mean(pl_flat)) if len(pl_flat) else float('nan'),
+#                             'p_value_flat': float(pv_flat['p_value']),
+#                             'zscore_flat': float(pv_flat['z']),
+#                             'total_pl_liability': float(np.sum(pl_liab)),
+#                             'avg_pl_liability': float(np.mean(pl_liab)) if len(pl_liab) else float('nan'),
+#                             'p_value_liability': float(pv_liab['p_value']),
+#                             'zscore_liability': float(pv_liab['z']),
+#                         }
+#
+#                 else:
+#                     # PSEUDO P/L
+#                     stake = np.full(len(bet_idx), float(classify_stake), dtype=float)
+#                     if classify_side == "back":
+#                         pl = np.where(sel_wins, stake, -stake)
+#                     else:
+#                         pl = np.where(sel_wins, -stake, stake)
+#                     bets_df = pd.DataFrame({
+#                         **name_cols,
+#                         'selection': f'CLASSIFY_{classify_side.upper()}',
+#                         'stake_pseudo': stake,
+#                         'pl_pseudo': pl,
+#                         'threshold': thr,
+#                         'odds_min': omin, 'odds_max': omax,
+#                     })
+#                     if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                     bets_df['cum_pl_pseudo'] = bets_df['pl_pseudo'].cumsum()
+#                     total_pl = float(bets_df['pl_pseudo'].sum())
+#                     avg_pl = float(total_pl / max(1, len(bets_df)))
+#
+#             # record
+#             records = {
+#                 **best_params,
+#                 'threshold': thr,
+#                 'odds_min': omin, 'odds_max': omax,
+#                 'val_precision_lcb': cand['val_precision_lcb'],
+#                 'val_precision': cand['val_precision'],
+#                 'val_accuracy': cand['val_accuracy'],
+#                 'n_preds_test': n_preds_test,
+#                 'test_precision': float(prc_test),
+#                 'test_accuracy': float(acc_test),
+#                 'total_pl': total_pl,
+#                 'avg_pl': avg_pl,
+#                 'p_value': p_value,
+#                 'zscore': zscore,
+#                 'pass_test_gate': pass_gate,
+#                 'fail_reason': reason,
+#                 'model_obj': final_calibrator if pass_gate else None,
+#                 'mode': f'CLASSIFY_{classify_side.upper()}',
+#                 'bets': bets_df if (bets_df is not None) else None,
+#             }
+#
+#             # include both LAY variants' aggregates if present
+#             if (bets_df is not None) and ('totals' in getattr(bets_df, 'attrs', {})) and (classify_side == 'lay'):
+#                 t = bets_df.attrs['totals']
+#                 records.update({
+#                     'total_pl_flat': t['total_pl_flat'],
+#                     'avg_pl_flat': t['avg_pl_flat'],
+#                     'p_value_flat': t['p_value_flat'],
+#                     'zscore_flat': t['zscore_flat'],
+#                     'total_pl_liability': t['total_pl_liability'],
+#                     'avg_pl_liability': t['avg_pl_liability'],
+#                     'p_value_liability': t['p_value_liability'],
+#                     'zscore_liability': t['zscore_liability'],
+#                 })
+#
+#             records_all.append(records)
+#
+#             if (bets_df is not None) and len(bet_idx):
+#                 meta = {
+#                     'candidate_id': cand_id,
+#                     'passed_test_gate': bool(pass_gate),
+#                     'mode': f'CLASSIFY_{classify_side.upper()}',
+#                     'market': market,
+#                     'threshold': thr,
+#                     'commission_rate': float(commission_rate),
+#                     'params_json': json.dumps(best_params, default=float),
+#                     'val_precision': float(cand['val_precision']),
+#                     'val_precision_lcb': float(cand['val_precision_lcb']),
+#                 }
+#                 bdf = bets_df.copy()
+#                 for k, v in meta.items(): bdf[k] = v
+#                 all_bets_collector.append(bdf)
+#
+#     survivors_df = pd.DataFrame(records_all)
+#     passers = survivors_df[survivors_df['pass_test_gate']].copy()
+#
+#     # ---------------- save / rank ----------------
+#     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#     tag = "xgb" if base_model == "xgb" else "mlp"
+#
+#     if passers.empty:
+#         fail_csv = None
+#         if save_diagnostics_on_fail:
+#             if 'p_value' in survivors_df.columns and survivors_df['p_value'].notna().any():
+#                 sort_cols = ['p_value','total_pl','val_precision_lcb']; asc = [True, False, False]
+#             else:
+#                 sort_cols = ['val_precision_lcb','val_precision','n_preds_test','val_accuracy']; asc = [False, False, False, False]
+#             diag = (survivors_df.drop(columns=['model_obj','bets'], errors='ignore')
+#                     .sort_values(by=sort_cols, ascending=asc)
+#                     .assign(market=market))
+#             fail_csv = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}_FAILED.csv")
+#             diag.to_csv(fail_csv, index=False); summary_df = diag
+#         else:
+#             summary_df = survivors_df.drop(columns=['model_obj','bets'], errors='ignore')
+#
+#         all_bets_csv_path = None
+#         if save_all_bets_csv and ((_USE_VALUE) or (_IS_CLASSIFY and classify_odds_column is not None)) and all_bets_collector:
+#             all_bets_df = pd.concat(all_bets_collector, ignore_index=True)
+#             if not all_bets_include_failed:
+#                 all_bets_df = all_bets_df[all_bets_df['passed_test_gate'] == True]
+#             all_bets_csv_path = os.path.join(all_bets_dir, f"all_bets_{market}_{timestamp}.csv")
+#             all_bets_df.to_csv(all_bets_csv_path, index=False)
+#
+#         if on_fail == "raise": raise RuntimeError("All Top-K failed the TEST gate.")
+#         if on_fail == "warn": print("[WARN] All Top-K failed the TEST gate.")
+#         return {'status':'failed_test_gate','csv':fail_csv,'model_pkl':None,
+#                 'summary_df':summary_df,'validation_table':ranked,
+#                 'bets_csv':None,'pl_plot':None,'all_bets_csv':all_bets_csv_path}
+#
+#     # Final ranking (unchanged core)
+#     if ('p_value' in passers.columns) and passers['p_value'].notna().any():
+#         passers_sorted = passers.sort_values(
+#             by=['p_value','total_pl','avg_pl','val_precision_lcb','val_precision'],
+#             ascending=[True, False, False, False, False]
+#         ).reset_index(drop=True)
+#     else:
+#         passers_sorted = passers.sort_values(
+#             by=['val_precision_lcb','val_precision','test_precision','n_preds_test','val_accuracy'],
+#             ascending=[False, False, False, False, False]
+#         ).reset_index(drop=True)
+#
+#     # Save PKL + CSV
+#     pkl_path = os.path.join(model_dir, f"best_model_{market}_{tag}_calibrated_{timestamp}.pkl")
+#     csv_df = passers_sorted.drop(columns=['model_obj','bets'], errors='ignore').copy()
+#     csv_df['model_pkl'] = ""; csv_df.loc[0, 'model_pkl'] = pkl_path
+#     csv_df['market'] = market
+#     csv_path = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}.csv")
+#     csv_df.to_csv(csv_path, index=False)
+#
+#     # Save top model
+#     top_row = passers_sorted.iloc[0]
+#     chosen_model = top_row['model_obj']
+#     if base_model == "xgb":
+#         param_keys = ['n_estimators','max_depth','learning_rate','subsample','colsample_bytree','min_child_weight','reg_lambda']
+#     else:
+#         param_keys = ['hidden_layer_sizes','alpha','learning_rate_init','batch_size','max_iter']
+#     chosen_params = {k: top_row[k] for k in param_keys if k in passers_sorted.columns}
+#     chosen_threshold = float(top_row.get('threshold', np.nan))
+#     chosen_edge = float(top_row.get('edge_param', np.nan))
+#     chosen_odds_min = float(top_row.get('odds_min', np.nan)) if 'odds_min' in top_row.index else np.nan
+#     chosen_odds_max = float(top_row.get('odds_max', np.nan)) if 'odds_max' in top_row.index else np.nan
+#
+#     joblib.dump(
+#         {
+#             'model': chosen_model,
+#             'threshold': chosen_threshold,            # NaN in VALUE modes; meaningful in CLASSIFY
+#             'edge_param': chosen_edge,                # chosen edge (VALUE)
+#             'features': features,
+#             'base_model': base_model,
+#             'best_params': chosen_params,
+#             'precision_test_threshold': float(precision_test_threshold),
+#             'min_samples': int(min_samples),
+#             'min_test_samples': int(min_test_samples),
+#             'val_conf_level': float(val_conf_level),
+#             'max_precision_drop': float(max_precision_drop),
+#             'market': market,
+#             'mode': top_row['mode'],
+#             # VALUE mode staking winners (if any):
+#             'staking_plan_lay': top_row.get('staking_plan_lay', None) if _USE_VALUE_LAY else None,
+#             'staking_plan_back': top_row.get('staking_plan_back', None) if _USE_VALUE_BACK else None,
+#             # numeric staking params (VALUE):
+#             'liability_test': float(liability_test) if _USE_VALUE_LAY else None,
+#             'lay_flat_stake': float(lay_flat_stake) if _USE_VALUE_LAY else None,
+#             'lay_edge_scale': float(lay_edge_scale) if _USE_VALUE_LAY else None,
+#             'kelly_fraction_lay': float(kelly_fraction_lay) if _USE_VALUE_LAY else None,
+#             'min_lay_stake': float(min_lay_stake) if _USE_VALUE_LAY else None,
+#             'max_lay_stake': float(max_lay_stake) if _USE_VALUE_LAY else None,
+#             'min_lay_liability': float(min_lay_liability) if _USE_VALUE_LAY else None,
+#             'max_lay_liability': float(max_lay_liability) if _USE_VALUE_LAY else None,
+#             'back_stake_test': float(back_stake_test) if _USE_VALUE_BACK else None,
+#             'back_edge_scale': float(back_edge_scale) if _USE_VALUE_BACK else None,
+#             'kelly_fraction_back': float(kelly_fraction_back) if _USE_VALUE_BACK else None,
+#             'bankroll_back': float(bankroll_back) if _USE_VALUE_BACK else None,
+#             'min_back_stake': float(min_back_stake) if _USE_VALUE_BACK else None,
+#             'max_back_stake': float(max_back_stake) if _USE_VALUE_BACK else None,
+#             # CLASSIFY specifics for live use:
+#             'classify_stake': float(classify_stake) if _IS_CLASSIFY else None,
+#             'classify_odds_column': classify_odds_column if _IS_CLASSIFY else None,
+#             'classify_side': classify_side if _IS_CLASSIFY else None,
+#             'classify_odds_min': chosen_odds_min if _IS_CLASSIFY else None,
+#             'classify_odds_max': chosen_odds_max if _IS_CLASSIFY else None,
+#             # NEW: store classify-lay variant knobs
+#             'classify_lay_flat_stake': float(classify_lay_flat_stake) if (_IS_CLASSIFY and classify_side=='lay') else None,
+#             'classify_lay_liability': float(classify_lay_liability) if (_IS_CLASSIFY and classify_side=='lay') else None,
+#             # commission saved
+#             'commission_rate': float(commission_rate),
+#             'notes': ('Commission applied to winning returns; '
+#                       'VALUE & CLASSIFY(with-odds) ranked by smallest p-value; '
+#                       'CLASSIFY sweeps threshold + odds bands + side(back/lay); '
+#                       'CLASSIFY_LAY evaluates flat-stake and flat-liability variants; '
+#                       'bets CSV & cumulative P/L plot saved for the winner.'),
+#             'run_seed': int(RUN_SEED),
+#         },
+#         pkl_path
+#     )
+#
+#     # chosen bets CSV / plot
+#     bets_path = None
+#     plot_path = None
+#     bets_df = top_row.get('bets', None)
+#     if (save_bets_csv or plot_pl) and isinstance(bets_df, pd.DataFrame) and len(bets_df):
+#         if save_bets_csv:
+#             bets_name = f"bets_{market}_{timestamp}.csv"
+#             bets_path = os.path.join(bets_csv_dir, bets_name)
+#             bets_df.to_csv(bets_path, index=False)
+#         if plot_pl:
+#             try:
+#                 import matplotlib.pyplot as plt
+#                 fig = plt.figure()
+#                 x = bets_df['date'] if 'date' in bets_df.columns else np.arange(len(bets_df))
+#                 # Use 'cum_pl' (defined in VALUE/CLASSIFY_BACK; for CLASSIFY_LAY we set cum_pl := cum_pl_flat)
+#                 y = bets_df['cum_pl'] if 'cum_pl' in bets_df.columns else (bets_df['cum_pl_flat'] if 'cum_pl_flat' in bets_df.columns else None)
+#                 if y is None:
+#                     y = bets_df['pl'].cumsum()
+#                 plt.plot(x, y)
+#                 title = f"{market} cumulative P/L ({top_row['mode']})"
+#                 if plot_title_suffix: title += f" — {plot_title_suffix}"
+#                 plt.title(title)
+#                 plt.xlabel('Date' if 'date' in bets_df.columns else 'Bet #')
+#                 plt.ylabel('Cumulative P/L')
+#                 plt.tight_layout()
+#                 plot_name = f"cum_pl_{market}_{timestamp}.png"
+#                 plot_path = os.path.join(plot_dir, plot_name)
+#                 plt.savefig(plot_path, dpi=160); plt.close(fig)
+#             except Exception as e:
+#                 print(f"[WARN] Failed to create plot: {e}")
+#
+#     # ALL bets export (across all candidates) — sibling all_bets dir
+#     all_bets_csv_path = None
+#     if save_all_bets_csv and ((_USE_VALUE) or (_IS_CLASSIFY and classify_odds_column is not None)) and all_bets_collector:
+#         all_bets_df = pd.concat(all_bets_collector, ignore_index=True)
+#         if not all_bets_include_failed:
+#             all_bets_df = all_bets_df[all_bets_df['passed_test_gate'] == True]
+#         preferred = [c for c in [
+#             'date','league','country','home_team','away_team','match_id','event_name','selection',
+#             'market_odds','fair_odds','edge_ratio','stake','liability','commission_rate',
+#             'selection_won','target','pl','cum_pl','cum_pl_flat','cum_pl_liability',
+#             'candidate_id','passed_test_gate','mode','market','threshold',
+#             'odds_min','odds_max','edge_param',
+#             'staking_plan_lay','staking_plan_back',
+#             'val_precision','val_precision_lcb','n_value_bets_test','total_pl','avg_pl','p_value','zscore','params_json'
+#         ] if c in all_bets_df.columns]
+#         all_bets_df = all_bets_df[preferred + [c for c in all_bets_df.columns if c not in preferred]]
+#         all_bets_csv_path = os.path.join(all_bets_dir, f"all_bets_{market}_{timestamp}.csv")
+#         all_bets_df.to_csv(all_bets_csv_path, index=False)
+#
+#     return {
+#         'status': 'ok',
+#         'csv': csv_path,
+#         'model_pkl': pkl_path,
+#         'summary_df': csv_df,
+#         'validation_table': ranked,
+#         'bets_csv': bets_path,
+#         'pl_plot': plot_path,
+#         'all_bets_csv': all_bets_csv_path,
+#     }
+
+# def run_models_outcome(
+#     matches_filtered: pd.DataFrame,
+#     features: list,
+#     # ── gates ──────────────────────────────────────────────────────────────
+#     min_samples: int = 200,
+#     min_test_samples: int = 100,
+#     precision_test_threshold: float = 0.80,
+#     # ── model/search ───────────────────────────────────────────────────────
+#     base_model: str = "xgb",
+#     search_mode: str = "random",
+#     n_random_param_sets: int = 10,
+#     cpu_jobs: int = 6,
+#     top_k: int = 10,
+#     thresholds: np.ndarray | None = None,        # USED for CLASSIFY markets
+#     out_dir: str | None = None,
+#     # ── anti-overfitting ──────────────────────────────────────────────────
+#     val_conf_level: float = 0.99,
+#     max_precision_drop: float = 1,
+#     # ── failure handling ───────────────────────────────────────────────────
+#     on_fail: str = "return",                     # "return" | "warn" | "raise"
+#     save_diagnostics_on_fail: bool = True,
+#     # ── market ─────────────────────────────────────────────────────────────
+#     market: str = "LAY_AWAY",                    # LAY_* | BACK_* | OVER | UNDER (or other classify markets)
+#
+#     # ── VALUE LAY controls ────────────────────────────────────────────────
+#     use_value_for_lay: bool = True,
+#     value_edge_grid_lay: np.ndarray | None = None,   # e.g. np.round(np.arange(0.00,0.201,0.01),2)
+#
+#     # Staking plan search toggle + options (VALUE modes)
+#     enable_staking_plan_search: bool = False,
+#     staking_plan_lay_options: list[str] | None = None,
+#     staking_plan_back_options: list[str] | None = None,
+#
+#     # Single-plan (used when enable_staking_plan_search=False)
+#     staking_plan_lay: str = "liability",             # "liability" | "flat_stake" | "edge_prop" | "kelly_approx"
+#     staking_plan_back: str = "flat",                 # "flat" | "edge_prop" | "kelly"
+#
+#     # ── LAY staking parameters (balanced defaults) ────────────────────────
+#     liability_test: float = 1.0,
+#     lay_flat_stake: float = 1.0,
+#     lay_edge_scale: float = 0.05,
+#     kelly_fraction_lay: float = 1.0,
+#     min_lay_stake: float = 0.0,
+#     max_lay_stake: float = 1.0,
+#     min_lay_liability: float = 0.0,
+#     max_lay_liability: float = 2.0,
+#
+#     # ── VALUE BACK controls ────────────────────────────────────────────────
+#     use_value_for_back: bool = True,
+#     value_edge_grid_back: np.ndarray | None = None,
+#
+#     # BACK staking parameters
+#     back_stake_test: float = 1.0,
+#     back_edge_scale: float = 0.10,
+#     kelly_fraction_back: float = 0.25,
+#     bankroll_back: float = 100.0,
+#     min_back_stake: float = 0.0,
+#     max_back_stake: float = 10.0,
+#
+#     # ── CLASSIFY staking / odds (adds odds-band grid sweep) ───────────────
+#     classify_stake: float = 1.0,                      # flat stake for BACK classify
+#     classify_odds_column: str | None = None,          # e.g. 'away_odds', 'over25_odds'
+#     classify_side: str = "back",                      # "back" or "lay" (affects only P/L construction)
+#     classify_odds_min_grid: np.ndarray | None = None, # e.g. np.arange(1.00, 10.01, 0.25)
+#     classify_odds_max_grid: np.ndarray | None = None, # e.g. np.arange(1.00, 10.01, 0.25)
+#
+#     # ── CLASSIFY-LAY dual staking knobs ───────────────────────────────────
+#     classify_lay_flat_stake: float = 1.0,             # stake per bet (flat-stake variant)
+#     classify_lay_liability: float = 1.0,              # liability per bet (flat-liability variant)
+#
+#     # ── COMMISSION (applied to net winning returns) ───────────────────────
+#     commission_rate: float = 0.02,  # 2% commission on winnings
+#
+#     # ── OUTPUTS: chosen model ─────────────────────────────────────────────
+#     save_bets_csv: bool = False,
+#     bets_csv_dir: str | None = None,
+#     plot_pl: bool = False,
+#     plot_dir: str | None = None,
+#     plot_title_suffix: str = "",
+#     # ── OUTPUTS: ALL candidates ───────────────────────────────────────────
+#     save_all_bets_csv: bool = False,
+#     all_bets_dir: str | None = None,
+#     all_bets_include_failed: bool = True,
+# ):
+#     """
+#     VALUE modes behave as before (commission-adjusted). CLASSIFY now also:
+#       • Sweeps thresholds
+#       • If `classify_odds_column` provided, sweeps (odds_min, odds_max) bands over [1.00, 10.00] step 0.25
+#       • Uses a unified threshold rule for both back and lay:
+#             bet when p_pos >= threshold   (p_pos := P(target==1) = P(bet success))
+#       • For P/L in CLASSIFY, derives selection-occurs flag from the market:
+#             BACK_* : selection occurs when y==1
+#             LAY_*  : selection occurs when y==0
+#       • LAY classify evaluates BOTH flat-stake & flat-liability variants
+#       • Computes commission-adjusted P/L and p-value vs break-even
+#       • Ranks by smallest p-value (then P/L), saves bets CSV and P/L plot
+#     """
+#     # ---------------- setup ----------------
+#     import os, secrets, hashlib, json
+#     from datetime import datetime
+#     import numpy as np
+#     import pandas as pd
+#     from itertools import product
+#     from sklearn.model_selection import ParameterSampler
+#     from sklearn.metrics import precision_score, accuracy_score, roc_auc_score, log_loss, brier_score_loss
+#     from sklearn.calibration import CalibratedClassifierCV
+#     from sklearn.pipeline import Pipeline, make_pipeline
+#     from sklearn.preprocessing import StandardScaler
+#     from sklearn.neural_network import MLPClassifier
+#     from joblib import Parallel, delayed, parallel_backend
+#     from tqdm import tqdm
+#     from tqdm_joblib import tqdm_joblib
+#     import joblib
+#
+#     # --- xgboost import (optional)
+#     try:
+#         import xgboost as xgb
+#         _HAS_XGB_LOCAL = True
+#     except Exception:
+#         _HAS_XGB_LOCAL = False
+#     _HAS_XGB = globals().get("_HAS_XGB", _HAS_XGB_LOCAL)
+#     if base_model == "xgb" and not _HAS_XGB:
+#         raise ImportError("XGBoost not available; set base_model='mlp' or install xgboost.")
+#
+#     # --- random dists
+#     try:
+#         _randint; _uniform; _loguniform
+#     except NameError:
+#         from scipy.stats import randint as _randint
+#         from scipy.stats import uniform as _uniform
+#         from scipy.stats import loguniform as _loguniform
+#
+#     # --- Wilson LCB & normal CDF
+#     try:
+#         from scipy.stats import norm
+#         _Z = lambda conf: float(norm.ppf(1 - (1 - conf) / 2))
+#         _Phi = lambda z: float(norm.cdf(z))
+#     except Exception:
+#         import math
+#         _Z = lambda conf: 1.96 if abs(conf - 0.95) < 1e-6 else 1.64
+#         _Phi = lambda z: 0.5 * (1.0 + math.erf(z / (2**0.5)))
+#
+#     def _wilson_lcb(tp: int, fp: int, conf: float) -> float:
+#         n = tp + fp
+#         if n <= 0: return 0.0
+#         p = tp / n
+#         z = _Z(conf)
+#         denom = 1.0 + (z*z)/n
+#         centre = p + (z*z)/(2*n)
+#         rad = z * np.sqrt((p*(1-p)/n) + (z*z)/(4*n*n))
+#         return max(0.0, (centre - rad) / denom)
+#
+#     # defaults
+#     if thresholds is None:
+#         thresholds = np.round(np.arange(0.10, 0.91, 0.01), 2)  # CLASSIFY only
+#     if value_edge_grid_lay is None:
+#         value_edge_grid_lay = np.round(np.arange(0.00, 0.201, 0.01), 2)
+#     if value_edge_grid_back is None:
+#         value_edge_grid_back = np.round(np.arange(0.00, 0.201, 0.01), 2)
+#     if classify_odds_min_grid is None:
+#         classify_odds_min_grid = np.round(np.arange(1.00, 10.01, 0.25), 2)
+#     if classify_odds_max_grid is None:
+#         classify_odds_max_grid = np.round(np.arange(1.00, 10.01, 0.25), 2)
+#     classify_side = str(classify_side).lower().strip()
+#     if classify_side not in ("back","lay"):
+#         raise ValueError("classify_side must be 'back' or 'lay'")
+#
+#     # normalise staking-plan options
+#     if staking_plan_lay_options is None:
+#         staking_plan_lay_options = ["liability", "flat_stake", "edge_prop", "kelly_approx"]
+#     if staking_plan_back_options is None:
+#         staking_plan_back_options = ["flat", "edge_prop", "kelly"]
+#     if not enable_staking_plan_search:
+#         staking_plan_lay_options = [staking_plan_lay]
+#         staking_plan_back_options = [staking_plan_back]
+#
+#     # --- paths
+#     BASE = r"C:\Users\leere\PycharmProjects\Football_ML3\FT Results"
+#     PKL_DIRS = {
+#         "LAY_HOME":  os.path.join(BASE, "Lay_Home",  "model_file"),
+#         "LAY_AWAY":  os.path.join(BASE, "Lay_Away",  "model_file"),
+#         "LAY_DRAW":  os.path.join(BASE, "Lay_Draw",  "model_file"),
+#         "BACK_HOME": os.path.join(BASE, "Back_Home", "model_file"),
+#         "BACK_AWAY": os.path.join(BASE, "Back_Away", "model_file"),
+#         "BACK_DRAW": os.path.join(BASE, "Back_Draw", "model_file"),
+#         "OVER":      os.path.join(BASE, "Over_2_5",  "model_file"),
+#         "UNDER":     os.path.join(BASE, "Under_2_5", "model_file"),
+#     }
+#     CSV_DIRS = {
+#         "LAY_HOME":  os.path.join(BASE, "Lay_Home",  "best_model_metrics"),
+#         "LAY_AWAY":  os.path.join(BASE, "Lay_Away",  "best_model_metrics"),
+#         "LAY_DRAW":  os.path.join(BASE, "Lay_Draw",  "best_model_metrics"),
+#         "BACK_HOME": os.path.join(BASE, "Back_Home", "best_model_metrics"),
+#         "BACK_AWAY": os.path.join(BASE, "Back_Away", "best_model_metrics"),
+#         "BACK_DRAW": os.path.join(BASE, "Back_Draw", "best_model_metrics"),
+#         "OVER":      os.path.join(BASE, "Over_2_5",  "best_model_metrics"),
+#         "UNDER":     os.path.join(BASE, "Under_2_5", "best_model_metrics"),
+#     }
+#
+#     market = str(market).upper().strip()
+#     if market not in PKL_DIRS: raise ValueError(f"Unsupported market '{market}'.")
+#     _IS_LAY  = market.startswith("LAY_")
+#     _IS_BACK = market.startswith("BACK_")
+#     _USE_VALUE_LAY  = bool(use_value_for_lay and _IS_LAY)
+#     _USE_VALUE_BACK = bool(use_value_for_back and _IS_BACK)
+#     _USE_VALUE = _USE_VALUE_LAY or _USE_VALUE_BACK
+#     _IS_CLASSIFY = not _USE_VALUE
+#
+#     csv_save_dir = out_dir if (out_dir and len(str(out_dir)) > 0) else CSV_DIRS[market]
+#     os.makedirs(csv_save_dir, exist_ok=True)
+#     model_dir = PKL_DIRS[market]; os.makedirs(model_dir, exist_ok=True)
+#     if bets_csv_dir is None: bets_csv_dir = csv_save_dir
+#     if plot_dir is None: plot_dir = csv_save_dir
+#     os.makedirs(bets_csv_dir, exist_ok=True)
+#     os.makedirs(plot_dir, exist_ok=True)
+#     if all_bets_dir is None:
+#         all_bets_dir = os.path.join(os.path.dirname(CSV_DIRS[market]), "all_bets")
+#     os.makedirs(all_bets_dir, exist_ok=True)
+#
+#     RUN_SEED = secrets.randbits(32)
+#     def _seed_from(*vals) -> int:
+#         h = hashlib.blake2b(digest_size=8)
+#         h.update(int(RUN_SEED).to_bytes(8,'little',signed=False))
+#         for v in vals: h.update(str(v).encode('utf-8'))
+#         return int.from_bytes(h.digest(),'little') & 0x7FFFFFFF
+#
+#     def _as_float(x):
+#         try: return float(x)
+#         except Exception: return float(str(x))
+#     def _as_int(x): return int(float(x))
+#
+#     # ---------------- data ----------------
+#     req_cols = {'date','target'}
+#     if _USE_VALUE: req_cols |= {'home_odds','draw_odds','away_odds'}
+#     missing = req_cols - set(matches_filtered.columns)
+#     if missing: raise ValueError(f"Missing required columns: {sorted(missing)}")
+#
+#     df = matches_filtered.copy()
+#     df['date'] = pd.to_datetime(df['date'], errors='coerce')
+#     df = df.sort_values('date').reset_index(drop=True)
+#
+#     cols_needed = list(set(features) | {'target'} | ({'home_odds','draw_odds','away_odds'} if _USE_VALUE else set()))
+#     if _IS_CLASSIFY and classify_odds_column is not None:
+#         cols_needed = list(set(cols_needed) | {classify_odds_column})
+#     df = df.dropna(subset=cols_needed).reset_index(drop=True)
+#
+#     X = df[features].copy()
+#     y = df['target'].astype(int).reset_index(drop=True)
+#
+#     n = len(X)
+#     if n < max(min_samples * 3, 500): raise RuntimeError(f"Not enough rows: {n}")
+#
+#     # temporal split
+#     test_start = int(0.85 * n)
+#     pretest_end = test_start
+#     X_test = X.iloc[test_start:].reset_index(drop=True)
+#     y_test = y.iloc[test_start:].reset_index(drop=True)
+#     df_test = df.iloc[test_start:].reset_index(drop=True)
+#
+#     # rolling validation folds
+#     N_FOLDS = 5
+#     total_val_len = max(1, int(0.15 * n))
+#     val_len = max(1, total_val_len // N_FOLDS)
+#     fold_val_ends = [pretest_end - total_val_len + (i + 1) * val_len for i in range(N_FOLDS)]
+#     fold_val_starts = [end - val_len for end in fold_val_ends]
+#     if fold_val_ends:
+#         fold_val_ends[-1] = min(fold_val_ends[-1], pretest_end)
+#         fold_val_starts[-1] = max(0, fold_val_ends[-1] - val_len)
+#
+#     # final small validation slice (for calibration before test)
+#     final_val_len = max(1, val_len)
+#     final_val_start = max(0, test_start - final_val_len)
+#     X_train_final = X.iloc[:final_val_start]
+#     y_train_final = y.iloc[:final_val_start]
+#     X_val_final   = X.iloc[final_val_start:test_start]
+#     y_val_final   = y.iloc[final_val_start:test_start]
+#
+#     # ---------------- param spaces ----------------
+#     xgb_param_grid = {'n_estimators':[200],'max_depth':[5],'learning_rate':[0.1],'subsample':[0.7],
+#                       'colsample_bytree':[1.0],'min_child_weight':[5],'reg_lambda':[1.0]}
+#     xgb_param_distributions = {'n_estimators':_randint(100,1001),'max_depth':_randint(3,8),
+#                                'learning_rate':_loguniform(0.01,0.2),'min_child_weight':_randint(3,13),
+#                                'subsample':_uniform(0.7,0.3),'colsample_bytree':_uniform(0.6,0.4),
+#                                'reg_lambda':_loguniform(0.1,10.0)}
+#     mlp_param_grid = {'hidden_layer_sizes':[(128,),(256,),(128,64)],'alpha':[1e-4],
+#                       'learning_rate_init':[1e-3],'batch_size':['auto'],'max_iter':[200]}
+#     mlp_param_distributions = {'hidden_layer_sizes':[(64,),(128,),(256,),(128,64),(256,128)],
+#                                'alpha':_loguniform(1e-5,1e-2),'learning_rate_init':_loguniform(5e-4,5e-2),
+#                                'batch_size':_randint(32,257),'max_iter':_randint(150,401)}
+#
+#     def cast_params(p: dict) -> dict:
+#         q = dict(p)
+#         if base_model == "xgb":
+#             for k in ['n_estimators','max_depth','min_child_weight']:
+#                 if k in q: q[k] = _as_int(q[k])
+#             for k in ['learning_rate','subsample','colsample_bytree','reg_lambda']:
+#                 if k in q: q[k] = _as_float(q[k])
+#         else:
+#             if 'max_iter' in q: q['max_iter'] = _as_int(q['max_iter'])
+#             if 'batch_size' in q and q['batch_size'] != 'auto': q['batch_size'] = _as_int(q['batch_size'])
+#             if 'alpha' in q: q['alpha'] = _as_float(q['alpha'])
+#             if 'learning_rate_init' in q: q['learning_rate_init'] = _as_float(q['learning_rate_init'])
+#             if 'hidden_layer_sizes' in q:
+#                 h = q['hidden_layer_sizes']
+#                 if isinstance(h, str):
+#                     parts = [pp.strip() for pp in h.strip("()").split(",") if pp.strip()!='']
+#                     q['hidden_layer_sizes'] = tuple(_as_int(pp) for pp in parts) if parts else (128,)
+#                 elif isinstance(h, (list, tuple, np.ndarray)):
+#                     q['hidden_layer_sizes'] = tuple(int(v) for v in h)
+#                 else:
+#                     q['hidden_layer_sizes'] = (int(h),)
+#         return q
+#
+#     def _final_step_name(estimator):
+#         try:
+#             if isinstance(estimator, Pipeline): return estimator.steps[-1][0]
+#         except Exception:
+#             pass
+#         return None
+#
+#     def build_model(params: dict, spw: float):
+#         model_seed = _seed_from("model", base_model, tuple(sorted(params.items())))
+#         if base_model == "xgb":
+#             return xgb.XGBClassifier(
+#                 objective='binary:logistic',
+#                 eval_metric='auc',
+#                 random_state=model_seed,
+#                 scale_pos_weight=spw,
+#                 n_jobs=1,
+#                 tree_method="hist",
+#                 verbosity=0,
+#                 **params
+#             )
+#         else:
+#             mlp = MLPClassifier(
+#                 random_state=model_seed,
+#                 early_stopping=True,
+#                 n_iter_no_change=20,
+#                 validation_fraction=0.1,
+#                 solver="adam",
+#                 **params
+#             )
+#             return make_pipeline(StandardScaler(with_mean=True, with_std=True), mlp)
+#
+#     def fit_model(model, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None):
+#         if base_model == "xgb":
+#             try:
+#                 model.set_params(verbosity=0, early_stopping_rounds=50)
+#                 if X_va is not None and y_va is not None:
+#                     model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
+#                 else:
+#                     model.fit(X_tr, y_tr, verbose=False)
+#             except Exception:
+#                 model.fit(X_tr, y_tr, verbose=False)
+#         else:
+#             fit_kwargs = {}
+#             if sample_weight is not None:
+#                 stepname = _final_step_name(model)
+#                 if stepname is not None:
+#                     fit_kwargs[f"{stepname}__sample_weight"] = sample_weight
+#             try:
+#                 model.fit(X_tr, y_tr, **fit_kwargs)
+#             except TypeError:
+#                 model.fit(X_tr, y_tr)
+#
+#     def fit_calibrator(fitted, X_va, y_va):
+#         try:
+#             from sklearn.calibration import FrozenEstimator
+#             frozen = FrozenEstimator(fitted)
+#             cal = CalibratedClassifierCV(frozen, method='sigmoid', cv=None)
+#             cal.fit(X_va, y_va)
+#             return cal
+#         except Exception:
+#             try:
+#                 cal = CalibratedClassifierCV(fitted, method='sigmoid', cv='prefit')
+#                 cal.fit(X_va, y_va); return cal
+#             except Exception:
+#                 return fitted
+#
+#     def _unwrap_estimator(est):
+#         if isinstance(est, Pipeline): return est.steps[-1][1]
+#         return est
+#
+#     def predict_proba_pos(model_or_cal, X_):
+#         proba = model_or_cal.predict_proba(X_)
+#         if proba.ndim == 2:
+#             classes = getattr(model_or_cal, "classes_", None)
+#             if classes is None:
+#                 base = _unwrap_estimator(model_or_cal); classes = getattr(base, "classes_", None)
+#             if classes is not None and len(classes) == proba.shape[1]:
+#                 try:
+#                     idx = int(np.where(np.asarray(classes) == 1)[0][0])
+#                     return proba[:, idx].astype(np.float32)
+#                 except Exception:
+#                     pass
+#             if proba.shape[1] == 2: return proba[:, 1].astype(np.float32)
+#             if proba.shape[1] == 1:
+#                 only = getattr(model_or_cal, "classes_", [0])[0]
+#                 return (np.ones_like(proba[:,0]) if only==1 else np.zeros_like(proba[:,0])).astype(np.float32)
+#         return np.asarray(proba, dtype=np.float32)
+#
+#     # --- p-value helper (commission-adjusted) ------------------------------
+#     def _pvalue_break_even(bdf: pd.DataFrame, mode: str) -> dict:
+#         if not isinstance(bdf, pd.DataFrame) or bdf.empty:
+#             return {'z': 0.0, 'p_value': 1.0, 'var_sum': 0.0, 'n': 0, 'total_pl': 0.0}
+#         o = np.asarray(bdf['market_odds'].values, dtype=float)
+#         o = np.where(o <= 1.0, np.nan, o)
+#         p = 1.0 / o  # null win prob
+#         if mode == 'VALUE_BACK':
+#             S = np.asarray(bdf['stake'].values, dtype=float)
+#             win = (o - 1.0) * S * (1.0 - commission_rate)
+#             lose = -S
+#         else:  # VALUE_LAY
+#             L = np.asarray(bdf.get('liability', np.nan*np.ones_like(o))).astype(float)
+#             stake = np.asarray(bdf['stake'].values, dtype=float)
+#             win  = stake * (1.0 - commission_rate)   # selection loses
+#             lose = -L                                 # selection wins
+#         var_i = p * (win ** 2) + (1.0 - p) * (lose ** 2)
+#         var_i = np.where(np.isfinite(var_i), var_i, 0.0)
+#         pl = np.asarray(bdf['pl'].values, dtype=float)
+#         total_pl = float(np.nansum(np.where(np.isfinite(pl), pl, 0.0)))
+#         var_sum = float(np.nansum(var_i))
+#         z = total_pl / (np.sqrt(var_sum) + 1e-12)
+#         p_val = max(0.0, 1.0 - _Phi(z))  # one-sided
+#         return {'z': float(z), 'p_value': float(p_val), 'var_sum': var_sum, 'n': int(len(pl)), 'total_pl': total_pl}
+#
+#     def _pvalue_break_even_lay_variant(mkt_odds, stake, liability, sel_wins):
+#         bdf = pd.DataFrame({
+#             'market_odds': mkt_odds,
+#             'stake': stake,
+#             'liability': liability,
+#             'pl': np.where(sel_wins, -liability, stake * (1.0 - commission_rate)),
+#         })
+#         return _pvalue_break_even(bdf, mode='VALUE_LAY')
+#
+#     def _lay_stakes(odds: np.ndarray, fair_over_market_minus1: np.ndarray, plan: str):
+#         o = np.asarray(odds, dtype=float)
+#         edge_plus = np.maximum(np.asarray(fair_over_market_minus1, dtype=float), 0.0)
+#         denom = np.maximum(o - 1.0, 1e-12)
+#
+#         def _apply_joint_bounds_from_stake(stake_desired: np.ndarray):
+#             stake_min_joint = np.maximum(float(min_lay_stake), float(min_lay_liability) / denom)
+#             stake_max_joint = np.minimum(float(max_lay_stake), float(max_lay_liability) / denom)
+#             stake = np.clip(stake_desired, stake_min_joint, stake_max_joint)
+#             L = stake * denom
+#             return stake, L
+#
+#         def _apply_joint_bounds_from_liability(L_desired: np.ndarray):
+#             L_min_joint = np.maximum(float(min_lay_liability), float(min_lay_stake) * denom)
+#             L_max_joint = np.minimum(float(max_lay_liability), float(max_lay_stake) * denom)
+#             L = np.clip(L_desired, L_min_joint, L_max_joint)
+#             stake = L / denom
+#             return stake, L
+#
+#         if plan == "liability":
+#             L_desired = np.full_like(o, float(liability_test), dtype=float)
+#             stake, L = _apply_joint_bounds_from_liability(L_desired)
+#         elif plan == "flat_stake":
+#             stake_desired = np.full_like(o, float(lay_flat_stake), dtype=float)
+#             stake, L = _apply_joint_bounds_from_stake(stake_desired)
+#         elif plan == "edge_prop":
+#             scale = max(1e-12, float(lay_edge_scale))
+#             L_desired = float(liability_test) * (edge_plus / scale)
+#             stake, L = _apply_joint_bounds_from_liability(L_desired)
+#         elif plan == "kelly_approx":
+#             L_desired = float(liability_test) * float(kelly_fraction_lay) * edge_plus
+#             stake, L = _apply_joint_bounds_from_liability(L_desired)
+#         else:
+#             raise ValueError(f"Unknown staking_plan_lay: {plan}")
+#
+#         stake = np.where(np.isfinite(stake), np.maximum(stake, 0.0), 0.0)
+#         L = np.where(np.isfinite(L), np.maximum(L, 0.0), 0.0)
+#         return stake, L
+#
+#     def _back_stakes(odds: np.ndarray, fair_over_market_minus1: np.ndarray, plan: str, p_win: np.ndarray):
+#         o = np.asarray(odds, dtype=float)
+#         p = np.clip(np.asarray(p_win, dtype=float), 0.0, 1.0)
+#         edge_plus = np.maximum(fair_over_market_minus1, 0.0)
+#         if plan == "flat":
+#             stake = np.full_like(o, float(back_stake_test), dtype=float)
+#         elif plan == "edge_prop":
+#             stake = float(back_stake_test) * np.divide(edge_plus, max(1e-9, float(back_edge_scale)))
+#         elif plan == "kelly":
+#             b = np.maximum(o - 1.0, 1e-9)
+#             f = (b * p - (1.0 - p)) / b
+#             f = np.maximum(f, 0.0)
+#             stake = float(bankroll_back) * float(kelly_fraction_back) * f
+#         else:
+#             raise ValueError(f"Unknown staking_plan_back: {plan}")
+#         stake = np.clip(stake, float(min_back_stake), float(max_back_stake))
+#         return stake
+#
+#     # ---------------- search space ----------------
+#     if search_mode.lower() == "grid":
+#         grid = xgb_param_grid if base_model == "xgb" else mlp_param_grid
+#         all_param_dicts = [dict(zip(grid.keys(), combo)) for combo in product(*grid.values())]
+#     else:
+#         dists = xgb_param_distributions if base_model == "xgb" else mlp_param_distributions
+#         sampler_seed = _seed_from("sampler")
+#         all_param_dicts = list(ParameterSampler(dists, n_iter=n_random_param_sets, random_state=sampler_seed))
+#
+#     # ---------------- validation eval ----------------
+#     def evaluate_param_set(param_dict, *_):
+#         safe = cast_params(param_dict)
+#         rows = []; val_prob_all=[]; val_true_all=[]
+#
+#         for vstart, vend in zip(fold_val_starts, fold_val_ends):
+#             if vstart is None or vend is None or vstart <= 0 or vend <= vstart: continue
+#             X_tr, y_tr = X.iloc[:vstart], y.iloc[:vstart]
+#             X_va, y_va = X.iloc[vstart:vend], y.iloc[vstart:vend]
+#             df_va = df.iloc[vstart:vend]
+#             if y_tr.nunique() < 2: continue
+#
+#             pos = int(y_tr.sum()); neg = len(y_tr) - pos
+#             spw = (neg/pos) if pos > 0 else 1.0
+#
+#             sample_weight = None
+#             if base_model == "mlp":
+#                 w_pos = spw
+#                 sample_weight = np.where(y_tr.values==1, w_pos, 1.0).astype(np.float32)
+#
+#             model = build_model(safe, spw)
+#             fit_model(model, X_tr, y_tr, X_va, y_va, sample_weight=sample_weight)
+#             cal = fit_calibrator(model, X_va, y_va)
+#
+#             p_pos = predict_proba_pos(cal, X_va)
+#             val_prob_all.append(p_pos)
+#             y_true = y_va.values.astype(np.uint8); val_true_all.append(y_true)
+#
+#             if _IS_CLASSIFY:
+#                 # unified bet decision: place a bet when p_pos >= thr (bet success prob high)
+#                 if classify_odds_column is None or classify_odds_column not in df_va.columns:
+#                     for thr in thresholds:
+#                         thr = float(thr)
+#                         take = (p_pos >= thr)
+#                         y_pred = (take).astype(np.uint8)
+#                         n_preds = int(y_pred.sum())
+#                         tp = int(((y_true == 1) & (y_pred == 1)).sum())
+#                         fp = int(((y_true == 0) & (y_pred == 1)).sum())
+#                         prc = precision_score(y_va, y_pred, zero_division=0)
+#                         acc = accuracy_score(y_va, y_pred)
+#                         rows.append({
+#                             **safe,
+#                             'threshold': thr,
+#                             'odds_min': np.nan, 'odds_max': np.nan,
+#                             'fold_vstart': int(vstart),
+#                             'fold_vend': int(vend),
+#                             'n_preds_val': n_preds,
+#                             'tp_val': tp,
+#                             'fp_val': fp,
+#                             'val_precision': float(prc),
+#                             'val_accuracy': float(acc),
+#                             'n_value_bets_val': n_preds,
+#                             'val_edge_ratio_mean': np.nan,
+#                             'val_edge_ratio_mean_back': np.nan,
+#                         })
+#                 else:
+#                     mkt = df_va[classify_odds_column].values.astype(float)
+#                     valid = np.isfinite(mkt) & (mkt > 1.01)
+#                     for thr in thresholds:
+#                         thr = float(thr)
+#                         pred_mask = (p_pos >= thr)
+#                         for omin in classify_odds_min_grid:
+#                             for omax in classify_odds_max_grid:
+#                                 omin = float(omin); omax = float(omax)
+#                                 if omin > omax: continue
+#                                 odds_mask = valid & (mkt >= omin) & (mkt <= omax)
+#                                 take = pred_mask & odds_mask
+#                                 y_pred = take.astype(np.uint8)
+#                                 n_preds = int(y_pred.sum())
+#                                 tp = int(((y_true == 1) & (y_pred == 1)).sum())
+#                                 fp = int(((y_true == 0) & (y_pred == 1)).sum())
+#                                 prc = precision_score(y_va, y_pred, zero_division=0)
+#                                 acc = accuracy_score(y_va, y_pred)
+#                                 rows.append({
+#                                     **safe,
+#                                     'threshold': thr,
+#                                     'odds_min': omin, 'odds_max': omax,
+#                                     'fold_vstart': int(vstart),
+#                                     'fold_vend': int(vend),
+#                                     'n_preds_val': n_preds,
+#                                     'tp_val': tp,
+#                                     'fp_val': fp,
+#                                     'val_precision': float(prc),
+#                                     'val_accuracy': float(acc),
+#                                     'n_value_bets_val': n_preds,
+#                                     'val_edge_ratio_mean': np.nan,
+#                                     'val_edge_ratio_mean_back': np.nan,
+#                                 })
+#             else:
+#                 # VALUE modes
+#                 if _IS_LAY:
+#                     mkt = df_va['away_odds'].values if market=="LAY_AWAY" else (df_va['home_odds'].values if market=="LAY_HOME" else df_va['draw_odds'].values)
+#                     p_sel_win = 1.0 - p_pos
+#                     fair = np.divide(1.0, np.clip(p_sel_win, 1e-9, 1.0))
+#                 else:
+#                     mkt = df_va['away_odds'].values if market=="BACK_AWAY" else (df_va['home_odds'].values if market=="BACK_HOME" else df_va['draw_odds'].values)
+#                     p_sel_win = p_pos
+#                     fair = np.divide(1.0, np.clip(p_sel_win, 1e-9, 1.0))
+#                 edge_grid = value_edge_grid_lay if _IS_LAY else value_edge_grid_back
+#                 for edge_param in edge_grid:
+#                     if _IS_LAY:
+#                         edge_mask = (fair >= (1.0 + float(edge_param)) * mkt) & np.isfinite(mkt)
+#                         with np.errstate(divide='ignore', invalid='ignore'):
+#                             edge_ratio = fair / mkt
+#                         val_edge_mean = float(np.nanmean(np.where(np.isfinite(edge_ratio), edge_ratio, np.nan)))
+#                     else:
+#                         edge_mask = (mkt >= (1.0 + float(edge_param)) * fair) & np.isfinite(mkt)
+#                         with np.errstate(divide='ignore', invalid='ignore'):
+#                             edge_ratio = mkt / fair
+#                         val_edge_mean = float(np.nanmean(np.where(np.isfinite(edge_ratio), edge_ratio, np.nan)))
+#                     y_pred = edge_mask.astype(np.uint8)
+#                     tp = int(((y_true == 1) & (y_pred == 1)).sum())
+#                     fp = int(((y_true == 0) & (y_pred == 1)).sum())
+#                     prc = precision_score(y_true, y_pred, zero_division=0)
+#                     acc = accuracy_score(y_true, y_pred)
+#                     rows.append({
+#                         **safe,
+#                         'threshold': np.nan,
+#                         'odds_min': np.nan, 'odds_max': np.nan,
+#                         'edge_param': float(edge_param),
+#                         'fold_vstart': int(vstart),
+#                         'fold_vend': int(vend),
+#                         'n_preds_val': int(y_pred.sum()),
+#                         'tp_val': tp,
+#                         'fp_val': fp,
+#                         'val_precision': float(prc),
+#                         'val_accuracy': float(acc),
+#                         'n_value_bets_val': int(y_pred.sum()),
+#                         'val_edge_ratio_mean': val_edge_mean if _IS_LAY else np.nan,
+#                         'val_edge_ratio_mean_back': val_edge_mean if _IS_BACK else np.nan,
+#                     })
+#
+#         # pooled diagnostics
+#         if val_prob_all:
+#             vp = np.concatenate(val_prob_all, axis=0)
+#             vt = np.concatenate(val_true_all, axis=0)
+#             try: val_auc = float(roc_auc_score(vt, vp))
+#             except Exception: val_auc = np.nan
+#             try: val_ll  = float(log_loss(vt, vp, labels=[0, 1]))
+#             except Exception: val_ll = np.nan
+#             try: val_bri = float(brier_score_loss(vt, vp))
+#             except Exception: val_bri = np.nan
+#         else:
+#             val_auc = val_ll = val_bri = np.nan
+#
+#         for r in rows:
+#             r['val_auc'] = val_auc
+#             r['val_logloss'] = val_ll
+#             r['val_brier'] = val_bri
+#
+#         return rows
+#
+#     # ---------------- search ----------------
+#     if base_model == "mlp":
+#         eff_jobs = min(max(1, cpu_jobs), 4); prefer = "threads"; backend = "threading"; pre_dispatch = eff_jobs
+#         ctx = parallel_backend(backend, n_jobs=eff_jobs)
+#     else:
+#         eff_jobs = max(1, min(cpu_jobs, 4)) if cpu_jobs != -1 else 4
+#         prefer = "processes"; backend = "loky"; pre_dispatch = f"{2*eff_jobs}"
+#         ctx = parallel_backend(backend, n_jobs=eff_jobs, inner_max_num_threads=1)
+#
+#     with ctx:
+#         try:
+#             with tqdm_joblib(tqdm(total=len(all_param_dicts), desc=f"Param search ({search_mode}, {base_model})")) as _:
+#                 out = Parallel(n_jobs=eff_jobs, batch_size=1, prefer=prefer, pre_dispatch=pre_dispatch)(
+#                     delayed(evaluate_param_set)(pd_) for pd_ in all_param_dicts
+#                 )
+#         except OSError as e:
+#             print(f"[WARN] Parallel failed with {e}. Falling back to serial search...")
+#             out = []
+#             for pd_ in tqdm(all_param_dicts, desc=f"Param search (serial, {base_model})"):
+#                 out.append(evaluate_param_set(pd_))
+#
+#     val_rows = [r for sub in out for r in sub]
+#     if not val_rows: raise RuntimeError("No validation rows produced (check folds and input data).")
+#     val_df = pd.DataFrame(val_rows)
+#
+#     # ---------------- validation aggregate ----------------
+#     if base_model == "xgb":
+#         param_keys = ['n_estimators','max_depth','learning_rate','subsample','colsample_bytree','min_child_weight','reg_lambda']
+#     else:
+#         param_keys = ['hidden_layer_sizes','alpha','learning_rate_init','batch_size','max_iter']
+#
+#     if _IS_CLASSIFY:
+#         if (classify_odds_column is not None) and (classify_odds_column in df.columns):
+#             group_cols = param_keys + ['threshold','odds_min','odds_max']
+#         else:
+#             group_cols = param_keys + ['threshold']
+#     else:
+#         group_cols = param_keys + ['edge_param']
+#
+#     agg_dict = {
+#         'n_preds_val': 'sum',
+#         'tp_val': 'sum',
+#         'fp_val': 'sum',
+#         'val_precision': 'mean',
+#         'val_accuracy': 'mean',
+#         'val_auc': 'mean',
+#         'val_logloss': 'mean',
+#         'val_brier': 'mean',
+#         'n_value_bets_val': 'sum',
+#     }
+#     if 'val_edge_ratio_mean' in val_df.columns: agg_dict['val_edge_ratio_mean'] = 'mean'
+#     if 'val_edge_ratio_mean_back' in val_df.columns: agg_dict['val_edge_ratio_mean_back'] = 'mean'
+#
+#     agg = val_df.groupby(group_cols, as_index=False).agg(agg_dict)
+#     agg['val_precision_pooled'] = agg.apply(lambda r: (r['tp_val'] / max(1, (r['tp_val'] + r['fp_val']))), axis=1)
+#     agg['val_precision_lcb'] = agg.apply(lambda r: _wilson_lcb(int(r['tp_val']), int(r['fp_val']), conf=val_conf_level), axis=1)
+#
+#     qual_mask = (
+#         (agg['val_precision'] >= float(precision_test_threshold)) &
+#         (agg['n_preds_val'] >= int(min_samples))
+#     )
+#     if _USE_VALUE_LAY or _USE_VALUE_BACK:
+#         qual_mask &= (agg['n_value_bets_val'] >= int(min_samples))
+#     qual = agg[qual_mask].copy()
+#
+#     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#     if qual.empty:
+#         fail_csv = None
+#         if save_diagnostics_on_fail:
+#             diag = (agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+#                                     ascending=[False, False, False, False])
+#                     .assign(fail_reason="failed_validation_gate", market=market))
+#             fail_csv = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}_FAILED.csv")
+#             os.makedirs(csv_save_dir, exist_ok=True); diag.to_csv(fail_csv, index=False)
+#         msg = "No strategy met validation gates."
+#         if on_fail == "raise": raise RuntimeError(msg)
+#         if on_fail == "warn": print("[WARN]", msg)
+#         return {'status':'failed_validation_gate','csv':fail_csv,'model_pkl':None,
+#                 'summary_df':None,'validation_table':agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+#                 ascending=[False,False,False,False]).reset_index(drop=True)}
+#
+#     ranked = qual.sort_values(by=['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
+#                               ascending=[False, False, False, False]).reset_index(drop=True)
+#     topk_val = ranked.head(top_k).reset_index(drop=True)
+#
+#     def _extract_params_from_row(row):
+#         return cast_params({k: row[k] for k in param_keys if k in row.index})
+#
+#     candidates = []
+#     for _, row in topk_val.iterrows():
+#         c = {
+#             'params': _extract_params_from_row(row),
+#             'val_precision': float(row['val_precision']),
+#             'val_precision_lcb': float(row['val_precision_lcb']),
+#             'val_accuracy': float(row['val_accuracy']),
+#             'n_preds_val': int(row['n_preds_val']),
+#         }
+#         if _IS_CLASSIFY:
+#             c['threshold'] = float(row['threshold'])
+#             c['odds_min'] = float(row['odds_min']) if 'odds_min' in row.index else np.nan
+#             c['odds_max'] = float(row['odds_max']) if 'odds_max' in row.index else np.nan
+#         else:
+#             c['edge_param'] = float(row['edge_param'])
+#         candidates.append(c)
+#
+#     # ---------------- test eval ----------------
+#     records_all = []
+#     all_bets_collector = []
+#
+#     def _name_cols(subdf):
+#         cols = {}
+#         for c in ['date','league','country','home_team','away_team','match_id']:
+#             if c in subdf.columns: cols[c] = subdf[c].values
+#         if {'home_team','away_team'}.issubset(subdf.columns):
+#             cols['event_name'] = (subdf['home_team'] + ' v ' + subdf['away_team']).values
+#         return cols
+#
+#     for cand_id, cand in enumerate(candidates):
+#         best_params = cast_params(cand['params'])
+#         pos = int(y_train_final.sum()); neg = len(y_train_final) - pos
+#         spw_final = (neg/pos) if pos > 0 else 1.0
+#
+#         final_model = build_model(best_params, spw_final)
+#         final_sample_weight = None
+#         if base_model == "mlp":
+#             w_pos = spw_final
+#             final_sample_weight = np.where(y_train_final.values==1, w_pos, 1.0).astype(np.float32)
+#
+#         fit_model(final_model, X_train_final, y_train_final, X_val_final, y_val_final, sample_weight=final_sample_weight)
+#         final_calibrator = fit_calibrator(final_model, X_val_final, y_val_final)
+#         p_pos_test = predict_proba_pos(final_calibrator, X_test)
+#
+#         if _USE_VALUE:
+#             # ===== VALUE modes (unchanged) =====
+#             if _IS_LAY:
+#                 if market == "LAY_AWAY":
+#                     p_sel_win = 1.0 - p_pos_test; mkt_odds = df_test['away_odds'].values; sel_name = 'AWAY'
+#                 elif market == "LAY_HOME":
+#                     p_sel_win = 1.0 - p_pos_test; mkt_odds = df_test['home_odds'].values; sel_name = 'HOME'
+#                 else:
+#                     p_sel_win = 1.0 - p_pos_test; mkt_odds = df_test['draw_odds'].values; sel_name = 'DRAW'
+#                 fair_odds = np.divide(1.0, np.clip(p_sel_win, 1e-9, 1.0))
+#                 valid = np.isfinite(mkt_odds) & (mkt_odds > 1.01)
+#                 edge = float(cand.get('edge_param', 0.0))
+#                 edge_mask = valid & (fair_odds >= (1.0 + edge) * mkt_odds)
+#                 with np.errstate(divide='ignore', invalid='ignore'):
+#                     edge_ratio_minus1 = np.where(mkt_odds > 0, fair_odds / mkt_odds - 1.0, 0.0)
+#
+#                 for plan in staking_plan_lay_options:
+#                     stake = np.zeros_like(mkt_odds, dtype=float)
+#                     liability = np.zeros_like(mkt_odds, dtype=float)
+#                     s, L = _lay_stakes(mkt_odds, edge_ratio_minus1, plan)
+#                     stake[edge_mask] = s[edge_mask]; liability[edge_mask] = L[edge_mask]
+#
+#                     sel_wins = (y_test.values == 0)
+#                     pl = np.zeros_like(stake)
+#                     idx_win = (stake > 0) & (~sel_wins)
+#                     idx_lose = (stake > 0) & (sel_wins)
+#                     pl[idx_win]  = stake[idx_win] * (1.0 - commission_rate)
+#                     pl[idx_lose] = -liability[idx_lose]
+#
+#                     n_bets = int(np.count_nonzero(stake > 0))
+#                     total_pl = float(pl.sum()); avg_pl = float(total_pl / max(1, n_bets))
+#
+#                     lays_as_preds = (stake > 0).astype(np.uint8)
+#                     prc_test = precision_score(y_test, lays_as_preds, zero_division=0)
+#                     acc_test = accuracy_score(y_test, lays_as_preds)
+#
+#                     bet_idx = np.where(stake > 0)[0]
+#                     name_cols = _name_cols(df_test.iloc[bet_idx])
+#                     bets_df = pd.DataFrame({
+#                         **name_cols,
+#                         'selection': sel_name,
+#                         'market_odds': mkt_odds[bet_idx],
+#                         'fair_odds': fair_odds[bet_idx],
+#                         'edge_ratio': np.where(mkt_odds[bet_idx] > 0, fair_odds[bet_idx] / mkt_odds[bet_idx], np.nan),
+#                         'liability': liability[bet_idx],
+#                         'stake': stake[bet_idx],
+#                         'commission_rate': float(commission_rate),
+#                         'selection_won': sel_wins[bet_idx].astype(int),
+#                         'target': y_test.values[bet_idx],
+#                         'pl': pl[bet_idx],
+#                     })
+#                     if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                     bets_df['cum_pl'] = bets_df['pl'].cumsum()
+#
+#                     pv = _pvalue_break_even(bets_df, mode='VALUE_LAY')
+#                     enough = n_bets >= int(min_test_samples)
+#                     not_collapsed = prc_test >= max(float(precision_test_threshold), float(cand['val_precision']) - float(max_precision_drop))
+#                     pass_gate = bool(enough and not_collapsed)
+#                     reason = "" if pass_gate else ("insufficient_test_bets" if not enough else "precision_collapse")
+#
+#                     if len(bets_df):
+#                         meta = {
+#                             'candidate_id': cand_id,'passed_test_gate': bool(pass_gate),'mode': 'VALUE_LAY','market': market,
+#                             'threshold': np.nan,'edge_param': edge,'staking_plan_lay': plan,
+#                             'val_precision': float(cand['val_precision']),'val_precision_lcb': float(cand['val_precision_lcb']),
+#                             'n_value_bets_test': int(n_bets),'total_pl': float(total_pl),'avg_pl': float(avg_pl),
+#                             'p_value': pv['p_value'],'zscore': pv['z'],'commission_rate': float(commission_rate),
+#                             'params_json': json.dumps(best_params, default=float),
+#                         }
+#                         bdf = bets_df.copy()
+#                         for k, v in meta.items(): bdf[k] = v
+#                         all_bets_collector.append(bdf)
+#
+#                     records_all.append({
+#                         **best_params, 'threshold': np.nan, 'odds_min': np.nan, 'odds_max': np.nan, 'edge_param': edge,
+#                         'val_precision_lcb': cand['val_precision_lcb'], 'val_precision': cand['val_precision'],
+#                         'val_accuracy': cand['val_accuracy'],
+#                         'n_value_bets_test': n_bets, 'test_precision_bets': float(prc_test),
+#                         'test_accuracy_bets': float(acc_test), 'total_pl': total_pl, 'avg_pl': avg_pl,
+#                         'p_value': pv['p_value'], 'zscore': pv['z'],
+#                         'pass_test_gate': pass_gate, 'fail_reason': reason, 'model_obj': final_calibrator if pass_gate else None,
+#                         'mode': 'VALUE_LAY', 'bets': bets_df if pass_gate else None,
+#                         'staking_plan_lay': plan,'commission_rate': float(commission_rate),
+#                     })
+#
+#             else:  # VALUE BACK
+#                 if market == "BACK_AWAY":
+#                     p_sel_win = p_pos_test; mkt_odds = df_test['away_odds'].values; sel_name = 'AWAY'
+#                 elif market == "BACK_HOME":
+#                     p_sel_win = p_pos_test; mkt_odds = df_test['home_odds'].values; sel_name = 'HOME'
+#                 else:
+#                     p_sel_win = p_pos_test; mkt_odds = df_test['draw_odds'].values; sel_name = 'DRAW'
+#                 fair_odds = np.divide(1.0, np.clip(p_sel_win, 1.0e-9, 1.0))
+#                 valid = np.isfinite(mkt_odds) & (mkt_odds > 1.01)
+#                 edge = float(cand.get('edge_param', 0.0))
+#                 edge_mask = valid & (mkt_odds >= (1.0 + edge) * fair_odds)
+#                 with np.errstate(divide='ignore', invalid='ignore'):
+#                     edge_ratio_minus1 = np.where(fair_odds > 0, mkt_odds / fair_odds - 1.0, 0.0)
+#
+#                 for plan in staking_plan_back_options:
+#                     stake = np.zeros_like(mkt_odds, dtype=float)
+#                     s = _back_stakes(mkt_odds, edge_ratio_minus1, plan, p_sel_win)
+#                     stake[edge_mask] = s[edge_mask]
+#
+#                     sel_wins = (y_test.values == 1)
+#                     pl = np.zeros_like(stake)
+#                     win_idx = (stake > 0) & sel_wins
+#                     lose_idx = (stake > 0) & (~sel_wins)
+#                     pl[win_idx]  = (mkt_odds[win_idx] - 1.0) * stake[win_idx] * (1.0 - commission_rate)
+#                     pl[lose_idx] = -stake[lose_idx]
+#
+#                     n_bets = int(np.count_nonzero(stake > 0))
+#                     total_pl = float(pl.sum()); avg_pl = float(total_pl / max(1, n_bets))
+#
+#                     backs_as_preds = (stake > 0).astype(np.uint8)
+#                     prc_test = precision_score(y_test, backs_as_preds, zero_division=0)
+#                     acc_test = accuracy_score(y_test, backs_as_preds)
+#
+#                     bet_idx = np.where(stake > 0)[0]
+#                     name_cols = _name_cols(df_test.iloc[bet_idx])
+#                     bets_df = pd.DataFrame({
+#                         **name_cols,
+#                         'selection': sel_name,
+#                         'market_odds': mkt_odds[bet_idx],
+#                         'fair_odds': fair_odds[bet_idx],
+#                         'edge_ratio': np.where(fair_odds[bet_idx] > 0, mkt_odds[bet_idx] / fair_odds[bet_idx], np.nan),
+#                         'stake': stake[bet_idx],
+#                         'commission_rate': float(commission_rate),
+#                         'selection_won': sel_wins[bet_idx].astype(int),
+#                         'target': y_test.values[bet_idx],
+#                         'pl': pl[bet_idx],
+#                     })
+#                     if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                     bets_df['cum_pl'] = bets_df['pl'].cumsum()
+#
+#                     pv = _pvalue_break_even(bets_df, mode='VALUE_BACK')
+#                     enough = n_bets >= int(min_test_samples)
+#                     not_collapsed = prc_test >= max(float(precision_test_threshold), float(cand['val_precision']) - float(max_precision_drop))
+#                     pass_gate = bool(enough and not_collapsed)
+#                     reason = "" if pass_gate else ("insufficient_test_bets" if not enough else "precision_collapse")
+#
+#                     if len(bets_df):
+#                         meta = {
+#                             'candidate_id': cand_id,'passed_test_gate': bool(pass_gate),'mode': 'VALUE_BACK','market': market,
+#                             'threshold': np.nan,'edge_param': edge,'staking_plan_back': plan,
+#                             'val_precision': float(cand['val_precision']),'val_precision_lcb': float(cand['val_precision_lcb']),
+#                             'n_value_bets_test': int(n_bets),'total_pl': float(total_pl),'avg_pl': float(avg_pl),
+#                             'p_value': pv['p_value'],'zscore': pv['z'],'commission_rate': float(commission_rate),
+#                             'params_json': json.dumps(best_params, default=float),
+#                         }
+#                         bdf = bets_df.copy()
+#                         for k, v in meta.items(): bdf[k] = v
+#                         all_bets_collector.append(bdf)
+#
+#                     records_all.append({
+#                         **best_params, 'threshold': np.nan, 'odds_min': np.nan, 'odds_max': np.nan, 'edge_param': edge,
+#                         'val_precision_lcb': cand['val_precision_lcb'], 'val_precision': cand['val_precision'],
+#                         'val_accuracy': cand['val_accuracy'],
+#                         'n_value_bets_test': n_bets, 'test_precision_bets': float(prc_test),
+#                         'test_accuracy_bets': float(acc_test), 'total_pl': total_pl, 'avg_pl': avg_pl,
+#                         'p_value': pv['p_value'], 'zscore': pv['z'],
+#                         'pass_test_gate': pass_gate, 'fail_reason': reason, 'model_obj': final_calibrator if pass_gate else None,
+#                         'mode': 'VALUE_BACK', 'bets': bets_df if pass_gate else None,
+#                         'staking_plan_back': plan,'commission_rate': float(commission_rate),
+#                     })
+#
+#         else:
+#             # ===== CLASSIFY TEST EVAL with odds band & unified bet rule =====
+#             thr = float(cand['threshold'])
+#             if (classify_odds_column is not None) and (classify_odds_column in df_test.columns):
+#                 o = df_test[classify_odds_column].values.astype(float)
+#                 valid = np.isfinite(o) & (o > 1.01)
+#                 omin = cand.get('odds_min', np.nan); omax = cand.get('odds_max', np.nan)
+#                 if np.isnan(omin) or np.isnan(omax):
+#                     odds_mask = valid
+#                     omin, omax = np.nan, np.nan
+#                 else:
+#                     odds_mask = valid & (o >= float(omin)) & (o <= float(omax))
+#             else:
+#                 o = None
+#                 odds_mask = np.ones(len(X_test), dtype=bool)
+#                 omin = np.nan; omax = np.nan
+#
+#             # unified bet decision: bet when model predicts bet success with prob >= thr
+#             pred_mask = (p_pos_test >= thr)
+#             take = pred_mask & odds_mask
+#             y_pred = take.astype(np.uint8)
+#             n_preds_test = int(y_pred.sum())
+#             prc_test = precision_score(y_test, y_pred, zero_division=0)
+#             acc_test = accuracy_score(y_test, y_pred)
+#             enough = n_preds_test >= int(min_test_samples)
+#             not_collapsed = prc_test >= max(float(precision_test_threshold),
+#                                             float(cand['val_precision']) - float(max_precision_drop))
+#             pass_gate = bool(enough and not_collapsed)
+#             reason = "" if pass_gate else ("insufficient_test_preds" if not enough else "precision_collapse")
+#
+#             # Derive selection-occurs flag from market for correct P/L semantics
+#             is_lay_mkt = market.startswith("LAY_")
+#             sel_occurs_full = (y_test.values == 1) if not is_lay_mkt else (y_test.values == 0)
+#
+#             # Bet-level P/L + p-value
+#             bets_df = None
+#             total_pl = float('nan'); avg_pl = float('nan'); p_value = float('nan'); zscore = float('nan')
+#
+#             bet_idx = np.where(take)[0]
+#             if len(bet_idx):
+#                 name_cols = _name_cols(df_test.iloc[bet_idx])
+#                 sel_occurs = sel_occurs_full[bet_idx]  # True means the laid/backed outcome occurred
+#                 if o is not None:
+#                     mkt_odds = o[bet_idx].astype(float)
+#                     base_cols = {
+#                         **name_cols,
+#                         'selection': f'CLASSIFY_{classify_side.upper()}',
+#                         'market_odds': mkt_odds,
+#                         'threshold': thr,
+#                         'odds_min': omin, 'odds_max': omax,
+#                         'commission_rate': float(commission_rate),
+#                         'selection_occurred': sel_occurs.astype(int),
+#                         'target': y_test.values[bet_idx],
+#                     }
+#
+#                     if classify_side == "back":
+#                         # Back wins when selection occurs
+#                         stake_flat = np.full(len(bet_idx), float(classify_stake), dtype=float)
+#                         pl_flat = np.zeros_like(stake_flat, dtype=float)
+#                         win_idx = sel_occurs
+#                         lose_idx = ~sel_occurs
+#                         pl_flat[win_idx]  = (mkt_odds[win_idx] - 1.0) * stake_flat[win_idx] * (1.0 - commission_rate)
+#                         pl_flat[lose_idx] = -stake_flat[lose_idx]
+#
+#                         bets_df = pd.DataFrame({
+#                             **base_cols,
+#                             'stake': stake_flat,
+#                             'pl': pl_flat,
+#                         })
+#                         if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                         bets_df['cum_pl'] = bets_df['pl'].cumsum()
+#
+#                         pv = _pvalue_break_even(bets_df[['market_odds','stake','pl']], mode='VALUE_BACK')
+#                         total_pl = float(bets_df['pl'].sum()); avg_pl = float(total_pl / max(1, len(bets_df)))
+#                         p_value = float(pv['p_value']); zscore = float(pv['z'])
+#
+#                     else:
+#                         # Lay wins when selection does NOT occur
+#                         # A) Flat-stake variant
+#                         stake_flat = np.full(len(bet_idx), float(classify_lay_flat_stake), dtype=float)
+#                         liability_flat = stake_flat * (mkt_odds - 1.0)
+#                         pl_flat = np.where(sel_occurs, -liability_flat, stake_flat * (1.0 - commission_rate))
+#                         pv_flat = _pvalue_break_even_lay_variant(mkt_odds, stake_flat, liability_flat, sel_occurs)
+#
+#                         # B) Flat-liability variant
+#                         liability_const = np.full(len(bet_idx), float(classify_lay_liability), dtype=float)
+#                         denom = np.maximum(mkt_odds - 1.0, 1e-12)
+#                         stake_liab = liability_const / denom
+#                         pl_liab = np.where(sel_occurs, -liability_const, stake_liab * (1.0 - commission_rate))
+#                         pv_liab = _pvalue_break_even_lay_variant(mkt_odds, stake_liab, liability_const, sel_occurs)
+#
+#                         bets_df = pd.DataFrame({
+#                             **base_cols,
+#                             # Flat-stake variant
+#                             'stake_flat': stake_flat,
+#                             'liability_flat': liability_flat,
+#                             'pl_flat': pl_flat,
+#                             # Flat-liability variant
+#                             'stake_liability': stake_liab,
+#                             'liability_liability': liability_const,
+#                             'pl_liability': pl_liab,
+#                         })
+#                         if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                         bets_df['cum_pl_flat'] = bets_df['pl_flat'].cumsum()
+#                         bets_df['cum_pl_liability'] = bets_df['pl_liability'].cumsum()
+#                         # For plotting/back-compat: expose a 'cum_pl' using flat-stake
+#                         bets_df['cum_pl'] = bets_df['cum_pl_flat']
+#
+#                         # Legacy totals use the flat-stake variant (back-compat)
+#                         total_pl = float(np.sum(pl_flat))
+#                         avg_pl = float(total_pl / max(1, len(bets_df)))
+#                         p_value = float(pv_flat['p_value']); zscore = float(pv_flat['z'])
+#
+#                         # Attach aggregates for both variants (useful in CSV/summary)
+#                         bets_df.attrs['totals'] = {
+#                             'total_pl_flat': float(np.sum(pl_flat)),
+#                             'avg_pl_flat': float(np.mean(pl_flat)) if len(pl_flat) else float('nan'),
+#                             'p_value_flat': float(pv_flat['p_value']),
+#                             'zscore_flat': float(pv_flat['z']),
+#                             'total_pl_liability': float(np.sum(pl_liab)),
+#                             'avg_pl_liability': float(np.mean(pl_liab)) if len(pl_liab) else float('nan'),
+#                             'p_value_liability': float(pv_liab['p_value']),
+#                             'zscore_liability': float(pv_liab['z']),
+#                         }
+#
+#                 else:
+#                     # PSEUDO P/L
+#                     stake = np.full(len(bet_idx), float(classify_stake), dtype=float)
+#                     if classify_side == "back":
+#                         pl = np.where(sel_occurs, stake, -stake)
+#                     else:
+#                         pl = np.where(sel_occurs, -stake, stake)
+#                     bets_df = pd.DataFrame({
+#                         **name_cols,
+#                         'selection': f'CLASSIFY_{classify_side.upper()}',
+#                         'stake_pseudo': stake,
+#                         'pl_pseudo': pl,
+#                         'threshold': thr,
+#                         'odds_min': omin, 'odds_max': omax,
+#                     })
+#                     if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
+#                     bets_df['cum_pl_pseudo'] = bets_df['pl_pseudo'].cumsum()
+#                     total_pl = float(bets_df['pl_pseudo'].sum())
+#                     avg_pl = float(total_pl / max(1, len(bets_df)))
+#
+#             # record
+#             records = {
+#                 **best_params,
+#                 'threshold': thr,
+#                 'odds_min': omin, 'odds_max': omax,
+#                 'val_precision_lcb': cand['val_precision_lcb'],
+#                 'val_precision': cand['val_precision'],
+#                 'val_accuracy': cand['val_accuracy'],
+#                 'n_preds_test': n_preds_test,
+#                 'test_precision': float(prc_test),
+#                 'test_accuracy': float(acc_test),
+#                 'total_pl': total_pl,
+#                 'avg_pl': avg_pl,
+#                 'p_value': p_value,
+#                 'zscore': zscore,
+#                 'pass_test_gate': pass_gate,
+#                 'fail_reason': reason,
+#                 'model_obj': final_calibrator if pass_gate else None,
+#                 'mode': f'CLASSIFY_{classify_side.upper()}',
+#                 'bets': bets_df if (bets_df is not None) else None,
+#             }
+#
+#             if (bets_df is not None) and ('totals' in getattr(bets_df, 'attrs', {})) and (classify_side == 'lay'):
+#                 t = bets_df.attrs['totals']
+#                 records.update({
+#                     'total_pl_flat': t['total_pl_flat'],
+#                     'avg_pl_flat': t['avg_pl_flat'],
+#                     'p_value_flat': t['p_value_flat'],
+#                     'zscore_flat': t['zscore_flat'],
+#                     'total_pl_liability': t['total_pl_liability'],
+#                     'avg_pl_liability': t['avg_pl_liability'],
+#                     'p_value_liability': t['p_value_liability'],
+#                     'zscore_liability': t['zscore_liability'],
+#                 })
+#
+#             records_all.append(records)
+#
+#             if (bets_df is not None) and len(bet_idx):
+#                 meta = {
+#                     'candidate_id': cand_id,
+#                     'passed_test_gate': bool(pass_gate),
+#                     'mode': f'CLASSIFY_{classify_side.upper()}',
+#                     'market': market,
+#                     'threshold': thr,
+#                     'commission_rate': float(commission_rate),
+#                     'params_json': json.dumps(best_params, default=float),
+#                     'val_precision': float(cand['val_precision']),
+#                     'val_precision_lcb': float(cand['val_precision_lcb']),
+#                 }
+#                 bdf = bets_df.copy()
+#                 for k, v in meta.items(): bdf[k] = v
+#                 all_bets_collector.append(bdf)
+#
+#     survivors_df = pd.DataFrame(records_all)
+#     passers = survivors_df[survivors_df['pass_test_gate']].copy()
+#
+#     # ---------------- save / rank ----------------
+#     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#     tag = "xgb" if base_model == "xgb" else "mlp"
+#
+#     if passers.empty:
+#         fail_csv = None
+#         if save_diagnostics_on_fail:
+#             if 'p_value' in survivors_df.columns and survivors_df['p_value'].notna().any():
+#                 sort_cols = ['p_value','total_pl','val_precision_lcb']; asc = [True, False, False]
+#             else:
+#                 sort_cols = ['val_precision_lcb','val_precision','n_preds_test','val_accuracy']; asc = [False, False, False, False]
+#             diag = (survivors_df.drop(columns=['model_obj','bets'], errors='ignore')
+#                     .sort_values(by=sort_cols, ascending=asc)
+#                     .assign(market=market))
+#             fail_csv = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}_FAILED.csv")
+#             diag.to_csv(fail_csv, index=False); summary_df = diag
+#         else:
+#             summary_df = survivors_df.drop(columns=['model_obj','bets'], errors='ignore')
+#
+#         all_bets_csv_path = None
+#         if save_all_bets_csv and ((_USE_VALUE) or (_IS_CLASSIFY and classify_odds_column is not None)) and all_bets_collector:
+#             all_bets_df = pd.concat(all_bets_collector, ignore_index=True)
+#             if not all_bets_include_failed:
+#                 all_bets_df = all_bets_df[all_bets_df['passed_test_gate'] == True]
+#             all_bets_csv_path = os.path.join(all_bets_dir, f"all_bets_{market}_{timestamp}.csv")
+#             all_bets_df.to_csv(all_bets_csv_path, index=False)
+#
+#         if on_fail == "raise": raise RuntimeError("All Top-K failed the TEST gate.")
+#         if on_fail == "warn": print("[WARN] All Top-K failed the TEST gate.")
+#         return {'status':'failed_test_gate','csv':fail_csv,'model_pkl':None,
+#                 'summary_df':summary_df,'validation_table':ranked,
+#                 'bets_csv':None,'pl_plot':None,'all_bets_csv':all_bets_csv_path}
+#
+#     # Final ranking (unchanged core)
+#     if ('p_value' in passers.columns) and passers['p_value'].notna().any():
+#         passers_sorted = passers.sort_values(
+#             by=['p_value','total_pl','avg_pl','val_precision_lcb','val_precision'],
+#             ascending=[True, False, False, False, False]
+#         ).reset_index(drop=True)
+#     else:
+#         passers_sorted = passers.sort_values(
+#             by=['val_precision_lcb','val_precision','test_precision','n_preds_test','val_accuracy'],
+#             ascending=[False, False, False, False, False]
+#         ).reset_index(drop=True)
+#
+#     # Save PKL + CSV
+#     pkl_path = os.path.join(model_dir, f"best_model_{market}_{tag}_calibrated_{timestamp}.pkl")
+#     csv_df = passers_sorted.drop(columns=['model_obj','bets'], errors='ignore').copy()
+#     csv_df['model_pkl'] = ""; csv_df.loc[0, 'model_pkl'] = pkl_path
+#     csv_df['market'] = market
+#     csv_path = os.path.join(csv_save_dir, f"model_metrics_{market}_{timestamp}.csv")
+#     csv_df.to_csv(csv_path, index=False)
+#
+#     # Save top model
+#     top_row = passers_sorted.iloc[0]
+#     if base_model == "xgb":
+#         param_keys = ['n_estimators','max_depth','learning_rate','subsample','colsample_bytree','min_child_weight','reg_lambda']
+#     else:
+#         param_keys = ['hidden_layer_sizes','alpha','learning_rate_init','batch_size','max_iter']
+#     chosen_params = {k: top_row[k] for k in param_keys if k in passers_sorted.columns}
+#     chosen_threshold = float(top_row.get('threshold', np.nan))
+#     chosen_edge = float(top_row.get('edge_param', np.nan))
+#     chosen_odds_min = float(top_row.get('odds_min', np.nan)) if 'odds_min' in top_row.index else np.nan
+#     chosen_odds_max = float(top_row.get('odds_max', np.nan)) if 'odds_max' in top_row.index else np.nan
+#
+#     joblib.dump(
+#         {
+#             'model': top_row['model_obj'],
+#             'threshold': chosen_threshold,            # NaN in VALUE modes; meaningful in CLASSIFY
+#             'edge_param': chosen_edge,                # chosen edge (VALUE)
+#             'features': features,
+#             'base_model': base_model,
+#             'best_params': chosen_params,
+#             'precision_test_threshold': float(precision_test_threshold),
+#             'min_samples': int(min_samples),
+#             'min_test_samples': int(min_test_samples),
+#             'val_conf_level': float(val_conf_level),
+#             'max_precision_drop': float(max_precision_drop),
+#             'market': market,
+#             'mode': top_row['mode'],
+#             # VALUE mode staking winners (if any):
+#             'staking_plan_lay': top_row.get('staking_plan_lay', None) if _USE_VALUE_LAY else None,
+#             'staking_plan_back': top_row.get('staking_plan_back', None) if _USE_VALUE_BACK else None,
+#             # numeric staking params (VALUE):
+#             'liability_test': float(liability_test) if _USE_VALUE_LAY else None,
+#             'lay_flat_stake': float(lay_flat_stake) if _USE_VALUE_LAY else None,
+#             'lay_edge_scale': float(lay_edge_scale) if _USE_VALUE_LAY else None,
+#             'kelly_fraction_lay': float(kelly_fraction_lay) if _USE_VALUE_LAY else None,
+#             'min_lay_stake': float(min_lay_stake) if _USE_VALUE_LAY else None,
+#             'max_lay_stake': float(max_lay_stake) if _USE_VALUE_LAY else None,
+#             'min_lay_liability': float(min_lay_liability) if _USE_VALUE_LAY else None,
+#             'max_lay_liability': float(max_lay_liability) if _USE_VALUE_LAY else None,
+#             'back_stake_test': float(back_stake_test) if _USE_VALUE_BACK else None,
+#             'back_edge_scale': float(back_edge_scale) if _USE_VALUE_BACK else None,
+#             'kelly_fraction_back': float(kelly_fraction_back) if _USE_VALUE_BACK else None,
+#             'bankroll_back': float(bankroll_back) if _USE_VALUE_BACK else None,
+#             'min_back_stake': float(min_back_stake) if _USE_VALUE_BACK else None,
+#             'max_back_stake': float(max_back_stake) if _USE_VALUE_BACK else None,
+#             # CLASSIFY specifics for live use:
+#             'classify_stake': float(classify_stake) if _IS_CLASSIFY else None,
+#             'classify_odds_column': classify_odds_column if _IS_CLASSIFY else None,
+#             'classify_side': classify_side if _IS_CLASSIFY else None,
+#             'classify_odds_min': chosen_odds_min if _IS_CLASSIFY else None,
+#             'classify_odds_max': chosen_odds_max if _IS_CLASSIFY else None,
+#             # NEW: store classify-lay variant knobs
+#             'classify_lay_flat_stake': float(classify_lay_flat_stake) if (_IS_CLASSIFY and classify_side=='lay') else None,
+#             'classify_lay_liability': float(classify_lay_liability) if (_IS_CLASSIFY and classify_side=='lay') else None,
+#             # commission saved
+#             'commission_rate': float(commission_rate),
+#             'notes': ('Commission applied to winning returns; '
+#                       'VALUE & CLASSIFY(with-odds) ranked by smallest p-value; '
+#                       'CLASSIFY uses unified p>=thr rule (bet success prob); '
+#                       'For P/L, selection-occurs derived from market; '
+#                       'CLASSIFY_LAY evaluates flat-stake and flat-liability variants; '
+#                       'bets CSV & cumulative P/L plot saved for the winner.'),
+#             'run_seed': int(RUN_SEED),
+#         },
+#         pkl_path
+#     )
+#
+#     # chosen bets CSV / plot
+#     bets_path = None
+#     plot_path = None
+#     bets_df = top_row.get('bets', None)
+#     if (save_bets_csv or plot_pl) and isinstance(bets_df, pd.DataFrame) and len(bets_df):
+#         if save_bets_csv:
+#             bets_name = f"bets_{market}_{timestamp}.csv"
+#             bets_path = os.path.join(bets_csv_dir, bets_name)
+#             bets_df.to_csv(bets_path, index=False)
+#         if plot_pl:
+#             try:
+#                 import matplotlib.pyplot as plt
+#                 fig = plt.figure()
+#                 x = bets_df['date'] if 'date' in bets_df.columns else np.arange(len(bets_df))
+#                 y = bets_df['cum_pl'] if 'cum_pl' in bets_df.columns else (bets_df['cum_pl_flat'] if 'cum_pl_flat' in bets_df.columns else None)
+#                 if y is None:
+#                     y = bets_df['pl'].cumsum()
+#                 plt.plot(x, y)
+#                 title = f"{market} cumulative P/L ({top_row['mode']})"
+#                 if plot_title_suffix: title += f" — {plot_title_suffix}"
+#                 plt.title(title)
+#                 plt.xlabel('Date' if 'date' in bets_df.columns else 'Bet #')
+#                 plt.ylabel('Cumulative P/L')
+#                 plt.tight_layout()
+#                 plot_name = f"cum_pl_{market}_{timestamp}.png"
+#                 plot_path = os.path.join(plot_dir, plot_name)
+#                 plt.savefig(plot_path, dpi=160); plt.close(fig)
+#             except Exception as e:
+#                 print(f"[WARN] Failed to create plot: {e}")
+#
+#     # ALL bets export (across all candidates)
+#     all_bets_csv_path = None
+#     if save_all_bets_csv and ((_USE_VALUE) or (_IS_CLASSIFY and classify_odds_column is not None)) and all_bets_collector:
+#         all_bets_df = pd.concat(all_bets_collector, ignore_index=True)
+#         if not all_bets_include_failed:
+#             all_bets_df = all_bets_df[all_bets_df['passed_test_gate'] == True]
+#         preferred = [c for c in [
+#             'date','league','country','home_team','away_team','match_id','event_name','selection',
+#             'market_odds','fair_odds','edge_ratio','stake','liability','commission_rate',
+#             'selection_won','selection_occurred','target','pl','cum_pl','cum_pl_flat','cum_pl_liability',
+#             'candidate_id','passed_test_gate','mode','market','threshold',
+#             'odds_min','odds_max','edge_param',
+#             'staking_plan_lay','staking_plan_back',
+#             'val_precision','val_precision_lcb','n_value_bets_test','total_pl','avg_pl','p_value','zscore','params_json'
+#         ] if c in all_bets_df.columns]
+#         all_bets_df = all_bets_df[preferred + [c for c in all_bets_df.columns if c not in preferred]]
+#         all_bets_csv_path = os.path.join(all_bets_dir, f"all_bets_{market}_{timestamp}.csv")
+#         all_bets_df.to_csv(all_bets_csv_path, index=False)
+#
+#     return {
+#         'status': 'ok',
+#         'csv': csv_path,
+#         'model_pkl': pkl_path,
+#         'summary_df': csv_df,
+#         'validation_table': ranked,
+#         'bets_csv': bets_path,
+#         'pl_plot': plot_path,
+#         'all_bets_csv': all_bets_csv_path,
+#     }
+
 def run_models_outcome(
     matches_filtered: pd.DataFrame,
     features: list,
@@ -7705,11 +10362,11 @@ def run_models_outcome(
     # ── CLASSIFY staking / odds (adds odds-band grid sweep) ───────────────
     classify_stake: float = 1.0,                      # flat stake for BACK classify
     classify_odds_column: str | None = None,          # e.g. 'away_odds', 'over25_odds'
-    classify_side: str = "back",                      # "back" or "lay" for classify bets
+    classify_side: str = "back",                      # "back" or "lay" (affects only P/L construction)
     classify_odds_min_grid: np.ndarray | None = None, # e.g. np.arange(1.00, 10.01, 0.25)
     classify_odds_max_grid: np.ndarray | None = None, # e.g. np.arange(1.00, 10.01, 0.25)
 
-    # ── NEW: CLASSIFY-LAY dual staking knobs ──────────────────────────────
+    # ── CLASSIFY-LAY dual staking knobs ───────────────────────────────────
     classify_lay_flat_stake: float = 1.0,             # stake per bet (flat-stake variant)
     classify_lay_liability: float = 1.0,              # liability per bet (flat-liability variant)
 
@@ -7728,14 +10385,13 @@ def run_models_outcome(
     all_bets_include_failed: bool = True,
 ):
     """
-    VALUE modes behave as before (commission-adjusted). CLASSIFY now also:
-      • Sweeps thresholds
-      • If `classify_odds_column` provided, sweeps (odds_min, odds_max) bands over [1.00, 10.00] step 0.25
-      • Supports `classify_side="back"| "lay"`:
-          - back: bet when p>=thr within odds band, P/L like back bets (flat stake)
-          - lay:  bet when p<=1-thr within odds band, P/L like lay bets; evaluates BOTH flat-stake & flat-liability variants
-      • Computes commission-adjusted P/L and p-value vs break-even
-      • Ranks by smallest p-value (then P/L), saves bets CSV and P/L plot
+    VALUE modes behave as before (commission-adjusted). CLASSIFY now:
+      • Uses unified threshold rule for both back & lay: bet when P(target==1) >= threshold.
+        (target==1 is *bet success* you provided in the data.)
+      • If `classify_odds_column` is present, sweeps (odds_min, odds_max) bands.
+      • For CLASSIFY-LAY, computes BOTH flat-stake and flat-liability variants, computes both p-values,
+        and **selects the variant with the smaller p-value** as the headline for ranking.
+      • We still export both variants' metrics in the record and bets CSV for transparency.
     """
     # ---------------- setup ----------------
     import os, secrets, hashlib, json
@@ -8066,12 +10722,12 @@ def run_models_outcome(
         p_val = max(0.0, 1.0 - _Phi(z))  # one-sided
         return {'z': float(z), 'p_value': float(p_val), 'var_sum': var_sum, 'n': int(len(pl)), 'total_pl': total_pl}
 
-    def _pvalue_break_even_lay_variant(mkt_odds, stake, liability, sel_wins):
+    def _pvalue_break_even_lay_variant(mkt_odds, stake, liability, sel_occurs):
         bdf = pd.DataFrame({
             'market_odds': mkt_odds,
             'stake': stake,
             'liability': liability,
-            'pl': np.where(sel_wins, -liability, stake * (1.0 - commission_rate)),
+            'pl': np.where(sel_occurs, -liability, stake * (1.0 - commission_rate)),
         })
         return _pvalue_break_even(bdf, mode='VALUE_LAY')
 
@@ -8170,10 +10826,11 @@ def run_models_outcome(
             y_true = y_va.values.astype(np.uint8); val_true_all.append(y_true)
 
             if _IS_CLASSIFY:
+                # unified bet decision: place a bet when p_pos >= thr (bet success prob high)
                 if classify_odds_column is None or classify_odds_column not in df_va.columns:
                     for thr in thresholds:
                         thr = float(thr)
-                        take = (p_pos >= thr) if classify_side == "back" else (p_pos <= (1.0 - thr))
+                        take = (p_pos >= thr)
                         y_pred = (take).astype(np.uint8)
                         n_preds = int(y_pred.sum())
                         tp = int(((y_true == 1) & (y_pred == 1)).sum())
@@ -8200,7 +10857,7 @@ def run_models_outcome(
                     valid = np.isfinite(mkt) & (mkt > 1.01)
                     for thr in thresholds:
                         thr = float(thr)
-                        pred_mask = (p_pos >= thr) if classify_side == "back" else (p_pos <= (1.0 - thr))
+                        pred_mask = (p_pos >= thr)
                         for omin in classify_odds_min_grid:
                             for omax in classify_odds_max_grid:
                                 omin = float(omin); omax = float(omax)
@@ -8368,7 +11025,7 @@ def run_models_outcome(
             os.makedirs(csv_save_dir, exist_ok=True); diag.to_csv(fail_csv, index=False)
         msg = "No strategy met validation gates."
         if on_fail == "raise": raise RuntimeError(msg)
-        if on_fail == "warn": print("[WARN]", msg)
+        if on_fail == "warn": print("[WARN] No strategy met the validation gate.")
         return {'status':'failed_validation_gate','csv':fail_csv,'model_pkl':None,
                 'summary_df':None,'validation_table':agg.sort_values(['val_precision_lcb','val_precision','n_preds_val','val_accuracy'],
                 ascending=[False,False,False,False]).reset_index(drop=True)}
@@ -8446,10 +11103,10 @@ def run_models_outcome(
                     s, L = _lay_stakes(mkt_odds, edge_ratio_minus1, plan)
                     stake[edge_mask] = s[edge_mask]; liability[edge_mask] = L[edge_mask]
 
-                    sel_wins = (y_test.values == 0)
+                    sel_occurs = (y_test.values == 0)  # selection occurs => lay loses
                     pl = np.zeros_like(stake)
-                    idx_win = (stake > 0) & (~sel_wins)
-                    idx_lose = (stake > 0) & (sel_wins)
+                    idx_win = (stake > 0) & (~sel_occurs)
+                    idx_lose = (stake > 0) & (sel_occurs)
                     pl[idx_win]  = stake[idx_win] * (1.0 - commission_rate)
                     pl[idx_lose] = -liability[idx_lose]
 
@@ -8471,7 +11128,7 @@ def run_models_outcome(
                         'liability': liability[bet_idx],
                         'stake': stake[bet_idx],
                         'commission_rate': float(commission_rate),
-                        'selection_won': sel_wins[bet_idx].astype(int),
+                        'selection_occurred': sel_occurs[bet_idx].astype(int),
                         'target': y_test.values[bet_idx],
                         'pl': pl[bet_idx],
                     })
@@ -8528,10 +11185,10 @@ def run_models_outcome(
                     s = _back_stakes(mkt_odds, edge_ratio_minus1, plan, p_sel_win)
                     stake[edge_mask] = s[edge_mask]
 
-                    sel_wins = (y_test.values == 1)
+                    sel_occurs = (y_test.values == 1)  # selection occurs => back wins
                     pl = np.zeros_like(stake)
-                    win_idx = (stake > 0) & sel_wins
-                    lose_idx = (stake > 0) & (~sel_wins)
+                    win_idx = (stake > 0) & sel_occurs
+                    lose_idx = (stake > 0) & (~sel_occurs)
                     pl[win_idx]  = (mkt_odds[win_idx] - 1.0) * stake[win_idx] * (1.0 - commission_rate)
                     pl[lose_idx] = -stake[lose_idx]
 
@@ -8552,7 +11209,7 @@ def run_models_outcome(
                         'edge_ratio': np.where(fair_odds[bet_idx] > 0, mkt_odds[bet_idx] / fair_odds[bet_idx], np.nan),
                         'stake': stake[bet_idx],
                         'commission_rate': float(commission_rate),
-                        'selection_won': sel_wins[bet_idx].astype(int),
+                        'selection_occurred': sel_occurs[bet_idx].astype(int),
                         'target': y_test.values[bet_idx],
                         'pl': pl[bet_idx],
                     })
@@ -8591,7 +11248,7 @@ def run_models_outcome(
                     })
 
         else:
-            # ===== CLASSIFY TEST EVAL with odds band & bet side =====
+            # ===== CLASSIFY TEST EVAL with odds band & unified bet rule =====
             thr = float(cand['threshold'])
             if (classify_odds_column is not None) and (classify_odds_column in df_test.columns):
                 o = df_test[classify_odds_column].values.astype(float)
@@ -8607,7 +11264,8 @@ def run_models_outcome(
                 odds_mask = np.ones(len(X_test), dtype=bool)
                 omin = np.nan; omax = np.nan
 
-            pred_mask = (p_pos_test >= thr) if classify_side == "back" else (p_pos_test <= (1.0 - thr))
+            # unified bet decision: bet when model predicts bet success with prob >= thr
+            pred_mask = (p_pos_test >= thr)
             take = pred_mask & odds_mask
             y_pred = take.astype(np.uint8)
             n_preds_test = int(y_pred.sum())
@@ -8619,14 +11277,19 @@ def run_models_outcome(
             pass_gate = bool(enough and not_collapsed)
             reason = "" if pass_gate else ("insufficient_test_preds" if not enough else "precision_collapse")
 
+            # Derive selection-occurs from market for correct P/L semantics
+            is_lay_mkt = market.startswith("LAY_")
+            sel_occurs_full = (y_test.values == 1) if not is_lay_mkt else (y_test.values == 0)
+
             # Bet-level P/L + p-value
             bets_df = None
             total_pl = float('nan'); avg_pl = float('nan'); p_value = float('nan'); zscore = float('nan')
+            chosen_variant = None
 
             bet_idx = np.where(take)[0]
             if len(bet_idx):
                 name_cols = _name_cols(df_test.iloc[bet_idx])
-                sel_wins = (y_test.values[bet_idx] == 1)   # selection WON
+                sel_occurs = sel_occurs_full[bet_idx]  # True: selection occurred (bad for LAY)
 
                 if o is not None:
                     mkt_odds = o[bet_idx].astype(float)
@@ -8637,44 +11300,49 @@ def run_models_outcome(
                         'threshold': thr,
                         'odds_min': omin, 'odds_max': omax,
                         'commission_rate': float(commission_rate),
-                        'selection_won': sel_wins.astype(int),
+                        'selection_occurred': sel_occurs.astype(int),
                         'target': y_test.values[bet_idx],
                     }
 
                     if classify_side == "back":
+                        # Back wins when selection occurs
                         stake_flat = np.full(len(bet_idx), float(classify_stake), dtype=float)
-                        pl_flat = np.zeros_like(stake_flat, dtype=float)
-                        win_idx = sel_wins
-                        lose_idx = ~sel_wins
-                        pl_flat[win_idx]  = (mkt_odds[win_idx] - 1.0) * stake_flat[win_idx] * (1.0 - commission_rate)
-                        pl_flat[lose_idx] = -stake_flat[lose_idx]
-
-                        bets_df = pd.DataFrame({
-                            **base_cols,
-                            'stake': stake_flat,
-                            'pl': pl_flat,
-                        })
+                        pl_flat = np.where(sel_occurs, (mkt_odds - 1.0) * stake_flat * (1.0 - commission_rate), -stake_flat)
+                        bets_df = pd.DataFrame({**base_cols, 'stake': stake_flat, 'pl': pl_flat})
                         if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
                         bets_df['cum_pl'] = bets_df['pl'].cumsum()
-
                         pv = _pvalue_break_even(bets_df[['market_odds','stake','pl']], mode='VALUE_BACK')
                         total_pl = float(bets_df['pl'].sum()); avg_pl = float(total_pl / max(1, len(bets_df)))
                         p_value = float(pv['p_value']); zscore = float(pv['z'])
+                        chosen_variant = 'back_flat'
 
                     else:
-                        # LAY CLASSIFY: evaluate BOTH variants
-                        # A) Flat-stake variant
+                        # LAY: compute BOTH variants and pick the better (smaller p-value)
+                        # A) Flat-stake
                         stake_flat = np.full(len(bet_idx), float(classify_lay_flat_stake), dtype=float)
                         liability_flat = stake_flat * (mkt_odds - 1.0)
-                        pl_flat = np.where(sel_wins, -liability_flat, stake_flat * (1.0 - commission_rate))
-                        pv_flat = _pvalue_break_even_lay_variant(mkt_odds, stake_flat, liability_flat, sel_wins)
+                        pl_flat = np.where(sel_occurs, -liability_flat, stake_flat * (1.0 - commission_rate))
+                        pv_flat = _pvalue_break_even_lay_variant(mkt_odds, stake_flat, liability_flat, sel_occurs)
 
-                        # B) Flat-liability variant
+                        # B) Flat-liability
                         liability_const = np.full(len(bet_idx), float(classify_lay_liability), dtype=float)
                         denom = np.maximum(mkt_odds - 1.0, 1e-12)
                         stake_liab = liability_const / denom
-                        pl_liab = np.where(sel_wins, -liability_const, stake_liab * (1.0 - commission_rate))
-                        pv_liab = _pvalue_break_even_lay_variant(mkt_odds, stake_liab, liability_const, sel_wins)
+                        pl_liab = np.where(sel_occurs, -liability_const, stake_liab * (1.0 - commission_rate))
+                        pv_liab = _pvalue_break_even_lay_variant(mkt_odds, stake_liab, liability_const, sel_occurs)
+
+                        # choose better (smaller p-value)
+                        choose_liab = (pv_liab['p_value'] < pv_flat['p_value'])
+                        if choose_liab:
+                            chosen_variant = 'lay_liability'
+                            total_pl = float(np.sum(pl_liab))
+                            avg_pl = float(total_pl / max(1, len(pl_liab)))
+                            p_value = float(pv_liab['p_value']); zscore = float(pv_liab['z'])
+                        else:
+                            chosen_variant = 'lay_flat'
+                            total_pl = float(np.sum(pl_flat))
+                            avg_pl = float(total_pl / max(1, len(pl_flat)))
+                            p_value = float(pv_flat['p_value']); zscore = float(pv_flat['z'])
 
                         bets_df = pd.DataFrame({
                             **base_cols,
@@ -8686,19 +11354,19 @@ def run_models_outcome(
                             'stake_liability': stake_liab,
                             'liability_liability': liability_const,
                             'pl_liability': pl_liab,
+                            'chosen_variant': chosen_variant,
                         })
                         if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
-                        bets_df['cum_pl_flat'] = bets_df['pl_flat'].cumsum()
-                        bets_df['cum_pl_liability'] = bets_df['pl_liability'].cumsum()
-                        # For plotting/back-compat: expose a 'cum_pl' using flat-stake
-                        bets_df['cum_pl'] = bets_df['cum_pl_flat']
 
-                        # Legacy totals use the flat-stake variant (back-compat)
-                        total_pl = float(np.sum(pl_flat))
-                        avg_pl = float(total_pl / max(1, len(bets_df)))
-                        p_value = float(pv_flat['p_value']); zscore = float(pv_flat['z'])
+                        # expose 'pl' and 'cum_pl' for the chosen variant for plotting/back-compat
+                        if chosen_variant == 'lay_liability':
+                            bets_df['pl'] = bets_df['pl_liability']
+                            bets_df['cum_pl'] = bets_df['pl_liability'].cumsum()
+                        else:
+                            bets_df['pl'] = bets_df['pl_flat']
+                            bets_df['cum_pl'] = bets_df['pl_flat'].cumsum()
 
-                        # Attach aggregates for both variants (useful in CSV/summary)
+                        # keep both variants’ aggregates too
                         bets_df.attrs['totals'] = {
                             'total_pl_flat': float(np.sum(pl_flat)),
                             'avg_pl_flat': float(np.mean(pl_flat)) if len(pl_flat) else float('nan'),
@@ -8711,24 +11379,33 @@ def run_models_outcome(
                         }
 
                 else:
-                    # PSEUDO P/L
+                    # PSEUDO P/L (no odds column)
                     stake = np.full(len(bet_idx), float(classify_stake), dtype=float)
                     if classify_side == "back":
-                        pl = np.where(sel_wins, stake, -stake)
+                        pl = np.where(sel_occurs, stake, -stake)
+                        chosen_variant = 'back_flat'
                     else:
-                        pl = np.where(sel_wins, -stake, stake)
+                        # for lay pseudo we still compute both and pick one by p-value
+                        pl_flat = np.where(sel_occurs, -stake*(1.0), stake*(1.0))  # pseudo
+                        pv_flat = {'p_value': 0.5, 'z': 0.0}  # placeholder
+                        pl_liab = pl_flat.copy()              # identical pseudo
+                        pv_liab = {'p_value': 0.5, 'z': 0.0}
+                        chosen_variant = 'lay_flat'
+
                     bets_df = pd.DataFrame({
                         **name_cols,
                         'selection': f'CLASSIFY_{classify_side.upper()}',
                         'stake_pseudo': stake,
-                        'pl_pseudo': pl,
+                        'pl_pseudo': pl if classify_side=='back' else pl_flat,  # pseudo
                         'threshold': thr,
                         'odds_min': omin, 'odds_max': omax,
+                        'chosen_variant': chosen_variant,
                     })
                     if 'date' in bets_df.columns: bets_df = bets_df.sort_values('date').reset_index(drop=True)
                     bets_df['cum_pl_pseudo'] = bets_df['pl_pseudo'].cumsum()
                     total_pl = float(bets_df['pl_pseudo'].sum())
                     avg_pl = float(total_pl / max(1, len(bets_df)))
+                    p_value = float('nan'); zscore = float('nan')
 
             # record
             records = {
@@ -8752,7 +11429,7 @@ def run_models_outcome(
                 'bets': bets_df if (bets_df is not None) else None,
             }
 
-            # include both LAY variants' aggregates if present
+            # include both LAY variants' aggregates + chosen_variant tag (if present)
             if (bets_df is not None) and ('totals' in getattr(bets_df, 'attrs', {})) and (classify_side == 'lay'):
                 t = bets_df.attrs['totals']
                 records.update({
@@ -8764,6 +11441,7 @@ def run_models_outcome(
                     'avg_pl_liability': t['avg_pl_liability'],
                     'p_value_liability': t['p_value_liability'],
                     'zscore_liability': t['zscore_liability'],
+                    'classify_lay_variant': bets_df['chosen_variant'].iloc[0],
                 })
 
             records_all.append(records)
@@ -8811,6 +11489,18 @@ def run_models_outcome(
             all_bets_df = pd.concat(all_bets_collector, ignore_index=True)
             if not all_bets_include_failed:
                 all_bets_df = all_bets_df[all_bets_df['passed_test_gate'] == True]
+            preferred = [c for c in [
+                'date','league','country','home_team','away_team','match_id','event_name','selection',
+                'market_odds','fair_odds','edge_ratio','stake','liability','commission_rate',
+                'selection_occurred','target','pl','cum_pl',
+                'stake_flat','liability_flat','pl_flat',
+                'stake_liability','liability_liability','pl_liability',
+                'candidate_id','passed_test_gate','mode','market','threshold',
+                'odds_min','odds_max','edge_param','chosen_variant',
+                'staking_plan_lay','staking_plan_back',
+                'val_precision','val_precision_lcb','n_value_bets_test','total_pl','avg_pl','p_value','zscore','params_json'
+            ] if c in all_bets_df.columns]
+            all_bets_df = all_bets_df[preferred + [c for c in all_bets_df.columns if c not in preferred]]
             all_bets_csv_path = os.path.join(all_bets_dir, f"all_bets_{market}_{timestamp}.csv")
             all_bets_df.to_csv(all_bets_csv_path, index=False)
 
@@ -8820,7 +11510,7 @@ def run_models_outcome(
                 'summary_df':summary_df,'validation_table':ranked,
                 'bets_csv':None,'pl_plot':None,'all_bets_csv':all_bets_csv_path}
 
-    # Final ranking (unchanged core)
+    # Final ranking: if p_value exists (CLASSIFY with odds or VALUE), sort by it first
     if ('p_value' in passers.columns) and passers['p_value'].notna().any():
         passers_sorted = passers.sort_values(
             by=['p_value','total_pl','avg_pl','val_precision_lcb','val_precision'],
@@ -8842,7 +11532,6 @@ def run_models_outcome(
 
     # Save top model
     top_row = passers_sorted.iloc[0]
-    chosen_model = top_row['model_obj']
     if base_model == "xgb":
         param_keys = ['n_estimators','max_depth','learning_rate','subsample','colsample_bytree','min_child_weight','reg_lambda']
     else:
@@ -8855,7 +11544,7 @@ def run_models_outcome(
 
     joblib.dump(
         {
-            'model': chosen_model,
+            'model': top_row['model_obj'],
             'threshold': chosen_threshold,            # NaN in VALUE modes; meaningful in CLASSIFY
             'edge_param': chosen_edge,                # chosen edge (VALUE)
             'features': features,
@@ -8892,16 +11581,17 @@ def run_models_outcome(
             'classify_side': classify_side if _IS_CLASSIFY else None,
             'classify_odds_min': chosen_odds_min if _IS_CLASSIFY else None,
             'classify_odds_max': chosen_odds_max if _IS_CLASSIFY else None,
-            # NEW: store classify-lay variant knobs
+            # Store chosen variant for CLASSIFY-LAY selection
+            'classify_lay_variant': top_row.get('classify_lay_variant', None) if (_IS_CLASSIFY and classify_side=='lay') else None,
+            # NEW: also persist the knobs used during evaluation (useful in live runs)
             'classify_lay_flat_stake': float(classify_lay_flat_stake) if (_IS_CLASSIFY and classify_side=='lay') else None,
             'classify_lay_liability': float(classify_lay_liability) if (_IS_CLASSIFY and classify_side=='lay') else None,
             # commission saved
             'commission_rate': float(commission_rate),
-            'notes': ('Commission applied to winning returns; '
-                      'VALUE & CLASSIFY(with-odds) ranked by smallest p-value; '
-                      'CLASSIFY sweeps threshold + odds bands + side(back/lay); '
-                      'CLASSIFY_LAY evaluates flat-stake and flat-liability variants; '
-                      'bets CSV & cumulative P/L plot saved for the winner.'),
+            'notes': ('Commission on winning returns; '
+                      'CLASSIFY uses unified p>=thr rule (bet success prob); '
+                      'CLASSIFY-LAY simulates both flat-stake & flat-liability and ranks by smaller p-value; '
+                      'VALUE unchanged; odds-band sweep optional; bets CSV & P/L plot saved.'),
             'run_seed': int(RUN_SEED),
         },
         pkl_path
@@ -8910,7 +11600,7 @@ def run_models_outcome(
     # chosen bets CSV / plot
     bets_path = None
     plot_path = None
-    bets_df = top_row.get('bets', None)
+    bets_df = passers_sorted.iloc[0].get('bets', None)
     if (save_bets_csv or plot_pl) and isinstance(bets_df, pd.DataFrame) and len(bets_df):
         if save_bets_csv:
             bets_name = f"bets_{market}_{timestamp}.csv"
@@ -8921,12 +11611,15 @@ def run_models_outcome(
                 import matplotlib.pyplot as plt
                 fig = plt.figure()
                 x = bets_df['date'] if 'date' in bets_df.columns else np.arange(len(bets_df))
-                # Use 'cum_pl' (defined in VALUE/CLASSIFY_BACK; for CLASSIFY_LAY we set cum_pl := cum_pl_flat)
-                y = bets_df['cum_pl'] if 'cum_pl' in bets_df.columns else (bets_df['cum_pl_flat'] if 'cum_pl_flat' in bets_df.columns else None)
-                if y is None:
+                y = None
+                if 'cum_pl' in bets_df.columns:
+                    y = bets_df['cum_pl']
+                elif 'cum_pl_flat' in bets_df.columns:  # legacy
+                    y = bets_df['cum_pl_flat']
+                if y is None and 'pl' in bets_df.columns:
                     y = bets_df['pl'].cumsum()
                 plt.plot(x, y)
-                title = f"{market} cumulative P/L ({top_row['mode']})"
+                title = f"{market} cumulative P/L ({passers_sorted.iloc[0]['mode']})"
                 if plot_title_suffix: title += f" — {plot_title_suffix}"
                 plt.title(title)
                 plt.xlabel('Date' if 'date' in bets_df.columns else 'Bet #')
@@ -8938,7 +11631,7 @@ def run_models_outcome(
             except Exception as e:
                 print(f"[WARN] Failed to create plot: {e}")
 
-    # ALL bets export (across all candidates) — sibling all_bets dir
+    # ALL bets export (across all candidates)
     all_bets_csv_path = None
     if save_all_bets_csv and ((_USE_VALUE) or (_IS_CLASSIFY and classify_odds_column is not None)) and all_bets_collector:
         all_bets_df = pd.concat(all_bets_collector, ignore_index=True)
@@ -8947,9 +11640,11 @@ def run_models_outcome(
         preferred = [c for c in [
             'date','league','country','home_team','away_team','match_id','event_name','selection',
             'market_odds','fair_odds','edge_ratio','stake','liability','commission_rate',
-            'selection_won','target','pl','cum_pl','cum_pl_flat','cum_pl_liability',
+            'selection_occurred','target','pl','cum_pl',
+            'stake_flat','liability_flat','pl_flat',
+            'stake_liability','liability_liability','pl_liability',
             'candidate_id','passed_test_gate','mode','market','threshold',
-            'odds_min','odds_max','edge_param',
+            'odds_min','odds_max','edge_param','chosen_variant',
             'staking_plan_lay','staking_plan_back',
             'val_precision','val_precision_lcb','n_value_bets_test','total_pl','avg_pl','p_value','zscore','params_json'
         ] if c in all_bets_df.columns]
@@ -8967,7 +11662,6 @@ def run_models_outcome(
         'pl_plot': plot_path,
         'all_bets_csv': all_bets_csv_path,
     }
-
 
 
 

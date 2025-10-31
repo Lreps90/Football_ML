@@ -836,39 +836,39 @@ if __name__ == "__main__":
     # scoreline_tuple = extract_scores(directory)
 
     # CLASSIFY
-    # fl.run_models_outcome(
-    #     matches_filtered=matches,
-    #     features=features,
-    #     market="LAY_AWAY",
-    #
-    #     # search/training
-    #     n_random_param_sets=5, cpu_jobs=5,
-    #     min_samples=500, min_test_samples=500,
-    #     precision_test_threshold=0.10,
-    #
-    #     # force CLASSIFY mode (not VALUE)
-    #     use_value_for_lay=False,
-    #     use_value_for_back=False,
-    #
-    #     # CLASSIFY settings
-    #     classify_side="lay",
-    #     classify_odds_column="away_odds",  # needed for real P/L on LAY_AWAY
-    #     # optional sweeps:
-    #     # thresholds=np.round(np.arange(0.10, 0.91, 0.01), 2),
-    #     # classify_odds_min_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
-    #     # classify_odds_max_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
-    #     # classify_odds_min_grid=np.array([1.01]),  # collapse band sweep
-    #     # classify_odds_max_grid=np.array([1000.0]),  # collapse band sweep
-    #
-    #     # test BOTH classify-lay staking variants:
-    #     classify_lay_flat_stake=1.0,  # stake per bet (flat-stake variant)
-    #     classify_lay_liability=1.0,  # liability per bet (flat-liability variant)
-    #
-    #     # outputs
-    #     save_bets_csv=True,
-    #     save_all_bets_csv=True,
-    #     plot_pl=True
-    # )
+    fl.run_models_outcome(
+        matches_filtered=matches,
+        features=features,
+        market="LAY_AWAY",
+
+        # search/training
+        n_random_param_sets=25, cpu_jobs=9,
+        min_samples=500, min_test_samples=500,
+        precision_test_threshold=0.10,
+
+        # force CLASSIFY mode (not VALUE)
+        use_value_for_lay=False,
+        use_value_for_back=False,
+
+        # CLASSIFY settings
+        classify_side="lay",
+        classify_odds_column="away_odds",  # needed for real P/L on LAY_AWAY
+        # optional sweeps:
+        # thresholds=np.round(np.arange(0.10, 0.91, 0.01), 2),
+        classify_odds_min_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
+        classify_odds_max_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
+        # classify_odds_min_grid=np.array([1.01]),  # collapse band sweep
+        # classify_odds_max_grid=np.array([1000.0]),  # collapse band sweep
+
+        # test BOTH classify-lay staking variants:
+        classify_lay_flat_stake=1.0,  # stake per bet (flat-stake variant)
+        classify_lay_liability=1.0,  # liability per bet (flat-liability variant)
+
+        # outputs
+        save_bets_csv=True,
+        save_all_bets_csv=True,
+        plot_pl=True
+    )
     # VALUE
     fl.run_models_outcome(
         matches_filtered=matches,
@@ -876,7 +876,7 @@ if __name__ == "__main__":
         market="LAY_AWAY",
 
         # train/search
-        n_random_param_sets=500, cpu_jobs=6,
+        n_random_param_sets=25, cpu_jobs=9,
         min_samples=500, min_test_samples=500,
         precision_test_threshold=0.10,
 
