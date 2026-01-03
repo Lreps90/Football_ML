@@ -18,6 +18,10 @@ import numpy as np
 import pandas as pd
 from joblib import load
 
+# add these:
+from pathlib import Path
+import importlib.util
+
 # Optional dependency (team name standardiser)
 try:
     import function_library as _fl  # must provide _fl.team_name_map(df)
@@ -109,6 +113,74 @@ _COLUMN_DICT = {
 }
 
 # ── Shared helpers ───────────────────────────────────────────────────────
+def load_excel_auto_convert(file_path: str, *, convert_to_xlsx: bool = True) -> pd.DataFrame:
+    """
+    Load an Excel file robustly.
+
+      - .xlsx / .xlsm → normal pd.read_excel
+      - .xls →
+          * try engine="calamine" first (python-calamine)
+          * if that fails, try engine="xlrd"
+          * optionally save a .xlsx copy IF openpyxl is installed
+      - anything else → try pd.read_csv
+    """
+    path = Path(file_path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    suffix = path.suffix.lower()
+
+    # Modern Excel formats
+    if suffix in {".xlsx", ".xlsm"}:
+        return pd.read_excel(path)
+
+    # Legacy .xls handling
+    if suffix == ".xls":
+        df = None
+        last_error = None
+
+        # 1) Prefer calamine, then xlrd
+        for engine in ("calamine", "xlrd"):
+            try:
+                df = pd.read_excel(path, engine=engine)
+                print(f"Loaded {path.name} using engine='{engine}'.")
+                break
+            except Exception as e:
+                last_error = e
+                print(f"Engine '{engine}' failed: {e}")
+
+        if df is None:
+            raise RuntimeError(
+                f"Failed to read legacy .xls file '{path}'. "
+                f"Last error: {last_error}\n"
+                f"Install python-calamine (and optionally xlrd), "
+                f"or open the file in Excel and re-save as .xlsx."
+            ) from last_error
+
+        # 2) Optionally: convert to .xlsx IF openpyxl is available
+        if convert_to_xlsx:
+            has_openpyxl = importlib.util.find_spec("openpyxl") is not None
+            if not has_openpyxl:
+                print(
+                    "openpyxl is not installed – skipping .xlsx export. "
+                    "Data is loaded into a DataFrame and ready to use."
+                )
+            else:
+                try:
+                    xlsx_path = path.with_suffix(".xlsx")
+                    df.to_excel(xlsx_path, index=False)
+                    print(f"Converted {path.name} → {xlsx_path.name}")
+                except Exception as e:
+                    print(f"Could not write .xlsx copy: {e}")
+
+        return df
+
+    # Fallback: non-Excel → assume CSV
+    print(f"{path.name} is not an Excel file, trying CSV reader.")
+    return pd.read_csv(path)
+
+
 def _round_half_up_2(x) -> str:
     """Exact two-decimal string with ROUND_HALF_UP (Excel-style)."""
     return str(Decimal(str(float(x))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
@@ -268,11 +340,12 @@ def _add_rolling_features_split(group: pd.DataFrame) -> pd.DataFrame:
 
 def _load_and_prepare_raw(file_path: str) -> pd.DataFrame:
     print(f"[1/9] Loading raw data: {file_path}")
-    df = pd.read_excel(file_path)
+    df = load_excel_auto_convert(file_path)  # ← use robust loader here
     df = df.rename(columns=_COLUMN_DICT).filter(items=_COLUMN_DICT.values())
     df['date'] = pd.to_datetime(df['date'], format="%d/%m/%Y", errors='coerce')
     df = df.sort_values('date')
     return df
+
 
 def _clip_to_period(df: pd.DataFrame, end_period: date) -> pd.DataFrame:
     today = datetime.today().date()

@@ -835,22 +835,79 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    fl.run_models_outcome(matches_filtered=matches,
-                          features=features,
-                          market='BACK_HOME',
-                          n_random_param_sets=5, cpu_jobs=2,
-                          min_samples=500, min_test_samples=500,
-                          precision_test_threshold=0.5,
-                          value_edge_grid_back=np.round(np.arange(0.00, 0.201, 0.01), 2),
-                          enable_staking_plan_search=True,  # ← single plan
-                          staking_plan_lay="flat_stake",  # choose it here
-                          save_bets_csv=True, plot_pl=True, save_all_bets_csv=True,
-                          classify_odds_column='home_odds',
-                          classify_odds_min_grid=np.array([1.00]),  # single value → no sweep
-                          classify_odds_max_grid=np.array([10.00]),  # single value → no sweep
-                          #classify_odds_min_grid=np.arange(1.0, 4.01, 0.25),
-                          #classify_odds_max_grid=np.arange(1.5, 10.01, 0.25)
-                     )
+    # CLASSIFY — BACK_HOME
+    fl.run_models_outcome(
+        matches_filtered=matches,
+        features=features,
+        market="BACK_HOME",
+
+        # force CLASSIFY
+        use_value_for_back=False,
+        use_value_for_lay=False,
+
+        # classify controls (back side, use home odds for P/L)
+        classify_side="back",
+        classify_odds_column="home_odds",
+        thresholds=np.round(np.arange(0.20, 0.81, 0.05), 2),
+        classify_odds_min_grid=np.round(np.arange(1.20, 6.01, 0.40), 2),
+        classify_odds_max_grid=np.round(np.arange(1.80, 10.01, 0.40), 2),
+
+        # training/search
+        base_model="xgb",
+        search_mode="random",
+        n_random_param_sets=100,
+        cpu_jobs=5,
+        min_samples=200,
+        min_test_samples=100,
+        precision_test_threshold=0.80,
+
+        # economics
+        commission_rate=0.02,
+
+        # outputs
+        save_bets_csv=False,
+        save_all_bets_csv=False,
+    )
+
+    # VALUE — BACK_HOME
+    fl.run_models_outcome(
+        matches_filtered=matches,
+        features=features,
+        market="BACK_HOME",
+
+        # force VALUE (back side)
+        use_value_for_back=True,
+        use_value_for_lay=False,
+
+        # value controls
+        value_edge_grid_back=np.round(np.arange(0.00, 0.201, 0.01), 2),
+
+        # staking plan search (back)
+        enable_staking_plan_search=True,
+        staking_plan_back_options=["flat"],
+        back_stake_test=1.0,
+        back_edge_scale=0.10,
+        kelly_fraction_back=0.25,
+        bankroll_back=100.0,
+        min_back_stake=0.0,
+        max_back_stake=10.0,
+
+        # training/search
+        base_model="xgb",
+        search_mode="random",
+        n_random_param_sets=100,
+        cpu_jobs=5,
+        min_samples=200,
+        min_test_samples=100,
+        precision_test_threshold=0.80,
+
+        # economics
+        commission_rate=0.02,
+
+        # outputs
+        save_bets_csv=False,
+        save_all_bets_csv=False,
+    )
 
     end = time.time()
 

@@ -835,11 +835,18 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    fl.run_models_25(matches, features, min_samples=1000, min_test_samples=1000,
-                     precision_test_threshold = 0.6,
-                     n_random_param_sets = 500,
-                     cpu_jobs=5,
-                     market = 'UNDER'
+    # fl.run_models_25(matches, features, min_samples=1000, min_test_samples=1000,
+    #                  precision_test_threshold = 0.6,
+    #                  n_random_param_sets = 500,
+    #                  cpu_jobs=5,
+    #                  market = 'UNDER'
+    #                  )
+
+    fl.run_models_25_v2(matches, features, min_samples=1000, min_test_samples=1000,
+                     precision_test_threshold=0.6,
+                     n_random_param_sets=100,
+                     cpu_jobs=10,
+                     market='UNDER'
                      )
 
     end = time.time()

@@ -835,82 +835,89 @@ if __name__ == "__main__":
     # directory = r"C:\Users\leere\PycharmProjects\Football_ML3\Goals\2H_goal\ht_scoreline\best_models_by_ht_scoreline"
     # scoreline_tuple = extract_scores(directory)
 
-    # CLASSIFY
-    fl.run_models_outcome(
+    # fl.run_models_outcome_v2(
+    #     matches_filtered=matches,
+    #     features=features,
+    #
+    #     base_model="xgb",
+    #     search_mode="random",
+    #     n_random_param_sets=25,
+    #     cpu_jobs=10,
+    #     min_samples=500,
+    #     min_test_samples=500,
+    #     precision_test_threshold=0.10,
+    #     max_precision_drop=0.05,
+    #
+    #     # --- VALUE mode BACK AWAY ---
+    #     market="BACK_AWAY",
+    #     use_value_for_lay=False,
+    #     use_value_for_back=True,
+    #
+    #     value_edge_grid_back=np.round(np.arange(0.00, 0.201, 0.01), 2),
+    #
+    #     staking_plan_back="flat",
+    #     back_stake_test=1.0,
+    #     back_edge_scale=0.10,
+    #     kelly_fraction_back=0.25,
+    #     bankroll_back=100.0,
+    #     min_back_stake=0.0,
+    #     max_back_stake=10.0,
+    #
+    #     commission_rate=0.02,
+    #
+    #     save_bets_csv=True,
+    #     bets_csv_dir=None,
+    #     plot_pl=True,
+    #     plot_dir=None,
+    #     plot_title_suffix="BACK_AWAY run",
+    # )
+
+    import numpy as np
+
+    res = fl.run_models_v3(
         matches_filtered=matches,
         features=features,
-        market="BACK_AWAY",
 
-        # force CLASSIFY
-        use_value_for_back=False,
-        use_value_for_lay=False,
-
-        # CLASSIFY controls
-        classify_side="back",
-        classify_odds_column="away_odds",  # REQUIRED for real P/L
-        thresholds=np.round(np.arange(0.20, 0.81, 0.05), 2),
-        classify_odds_min_grid=np.round(np.arange(1.20, 6.01, 0.40), 2),
-        classify_odds_max_grid=np.round(np.arange(1.80, 10.01, 0.40), 2),
-
-        # training/search
-        base_model="xgb",
+        # --- models/search (test them all) ---
+        models_to_test=("xgb", "mlp", "lr", "rf"),
         search_mode="random",
-        n_random_param_sets=5,
-        cpu_jobs=5,
-        min_samples=400,
-        min_test_samples=400,
+        n_random_param_sets=1,
+        cpu_jobs=10,
+        top_k=10,
+
+
+        # --- gates ---
+        min_samples=500,
+        min_test_samples=500,
         precision_test_threshold=0.10,
+        max_precision_drop=0.05,
+        min_val_auc=0.55,
+        max_val_brier=None,
 
-        # economics
-        commission_rate=0.02,
-
-        # outputs
-        save_bets_csv=True,
-        save_all_bets_csv=True,
-        plot_pl=True
-    )
-
-    # VALUE
-    fl.run_models_outcome(
-        matches_filtered=matches,
-        features=features,
+        # --- VALUE mode BACK AWAY ---
         market="BACK_AWAY",
-
-        # force VALUE (BACK)
-        use_value_for_back=True,
         use_value_for_lay=False,
-
-        # VALUE controls (edge sweep)
+        use_value_for_back=True,
         value_edge_grid_back=np.round(np.arange(0.00, 0.201, 0.01), 2),
 
-        # (optional) staking-plan search for BACK
-        enable_staking_plan_search=True,
-        staking_plan_back_options=["flat"],
+        # --- BACK staking plans tested on TEST ---
+        back_flat_stake=1.0,
 
-        # staking parameters / bounds for BACK
-        back_stake_test=1.0,
-        back_edge_scale=0.10,
-        kelly_fraction_back=0.25,
         bankroll_back=100.0,
+        whitaker_mode="split",  # <-- Whitaker variant uses split LC/NLC
+        whitaker_els_multiple=4.0,
+        whitaker_n_bets=1000,
+
         min_back_stake=0.0,
         max_back_stake=10.0,
 
-        # training/search
-        base_model="xgb",
-        search_mode="random",
-        n_random_param_sets=5,
-        cpu_jobs=5,
-        min_samples=400,
-        min_test_samples=400,
-        precision_test_threshold=0.10,
-
-        # economics
+        # --- commission + outputs ---
         commission_rate=0.02,
-
-        # outputs
         save_bets_csv=True,
-        save_all_bets_csv=True,
-        plot_pl=True
+        bets_csv_dir=None,
+        plot_pl=True,
+        plot_dir=None,
+        plot_title_suffix="BACK_AWAY run (all models + flat & Whitaker split)",
     )
 
     end = time.time()

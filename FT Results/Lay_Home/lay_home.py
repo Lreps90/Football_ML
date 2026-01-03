@@ -836,76 +836,220 @@ if __name__ == "__main__":
     # scoreline_tuple = extract_scores(directory)
 
     # CLASSIFY
-    fl.run_models_outcome(
-        matches_filtered=matches,
-        features=features,
-        market="LAY_HOME",
+    # fl.run_models_outcome(
+    #     matches_filtered=matches,
+    #     features=features,
+    #     market="LAY_HOME",
+    #
+    #     # ---- force CLASSIFY (not VALUE) ----
+    #     use_value_for_lay=False,
+    #     use_value_for_back=False,
+    #
+    #     # ---- classify settings (LAY side, use home odds for P/L) ----
+    #     classify_side="lay",
+    #     classify_odds_column="home_odds",  # REQUIRED for real P/L
+    #
+    #     # Unified decision rule: bet when P(success) >= threshold
+    #     thresholds=np.round(np.arange(0.20, 0.81, 0.05), 2),
+    #
+    #     # Optional odds-band sweep (keeps selections in sensible ranges)
+    #     classify_odds_min_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
+    #     classify_odds_max_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
+    #
+    #     # NEW: also sweep a minimum lay-odds floor and keep the best
+    #     lay_min_odds_grid=np.round(np.arange(1.05, 3.51, 0.05), 2),
+    #
+    #     # Test BOTH lay staking variants in CLASSIFY:
+    #     #  - flat-stake: stake = 1/(1-commission) => net win +1 after commission
+    #     #  - flat-liability: liability = 1 unit    => stake = 1/(odds-1)
+    #     classify_lay_flat_stake_net_win=1.0,
+    #     classify_lay_liability_unit=1.0,
+    #
+    #     # ---- training/search ----
+    #     base_model="xgb", search_mode="random",
+    #     n_random_param_sets=100, cpu_jobs=10,
+    #     min_samples=400, min_test_samples=400,
+    #     precision_test_threshold=0.10,
+    #     max_precision_drop=0.05,
+    #
+    #     # ---- economics & outputs ----
+    #     commission_rate=0.02,  # commission taken only on wins
+    #     save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
+    # )
 
-        # force CLASSIFY (not VALUE)
-        use_value_for_lay=False,
-        use_value_for_back=False,
+    # # VALUE
+    # fl.run_models_outcome(
+    #     matches_filtered=matches,
+    #     features=features,
+    #     market="LAY_HOME",
+    #
+    #     # VALUE mode (LAY only)
+    #     use_value_for_lay=True,
+    #     use_value_for_back=False,
+    #
+    #     # Value edge sweep: fair ≥ (1 + edge) × market
+    #     value_edge_grid_lay=np.round(np.arange(0.00, 0.201, 0.01), 2),
+    #
+    #     # NEW: sweep min lay odds and keep best
+    #     lay_min_odds_grid=np.round(np.arange(1.05, 3.51, 0.05), 2),
+    #
+    #     # Search only the LAY plans you want
+    #     enable_staking_plan_search=True,
+    #     staking_plan_lay_options=["flat_stake", "liability"],
+    #
+    #     # Training / search
+    #     base_model="xgb", search_mode="random",
+    #     n_random_param_sets=500, cpu_jobs=5,
+    #     min_samples=400, min_test_samples=400,
+    #     precision_test_threshold=0.10,
+    #     max_precision_drop=0.05,
+    #
+    #     # Economics & outputs (commission only on wins is handled inside)
+    #     commission_rate=0.02,
+    #     save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
+    # )
 
-        # classify settings (lay side, use home odds for P/L)
-        classify_side="lay",
-        classify_odds_column="home_odds",  # REQUIRED for real P/L
+    # fl.run_models_outcome_v2(
+    #     matches_filtered=matches,
+    #     features=features,
+    #     market="LAY_HOME",
+    #
+    #     # --- training / search ---
+    #     base_model="mlp",
+    #     search_mode="random",
+    #     n_random_param_sets=5,
+    #     cpu_jobs=10,
+    #     min_samples=500,
+    #     min_test_samples=500,
+    #     precision_test_threshold=0.10,
+    #     max_precision_drop=0.05,
+    #
+    #     # NEW extra validation controls (optional but recommended)
+    #     min_val_auc=0.55,  # or tweak based on experience
+    #     max_val_brier=None,  # leave as None to ignore for now
+    #
+    #     # --- VALUE mode (LAY only) ---
+    #     use_value_for_lay=True,
+    #     use_value_for_back=False,
+    #
+    #     # Value edge sweep: fair ≥ (1 + edge) × market
+    #     value_edge_grid_lay=np.round(np.arange(0.00, 0.201, 0.01), 2),
+    #
+    #     # v2: single lay odds floor (no grid search on test!)
+    #     lay_min_odds=1.50,  # choose one floor you like (e.g. 1.5)
+    #
+    #     # v2: single staking plan per run
+    #     staking_plan_lay="liability",  # "liability", "flat_stake", "edge_prop", "kelly_approx"
+    #
+    #     # --- BACK-plan bits are ignored because use_value_for_back=False ---
+    #     # but must be valid if you later use BACK markets
+    #     staking_plan_back="flat",
+    #
+    #     # --- BACK staking knobs (used only if you do VALUE_BACK later) ---
+    #     back_stake_test=1.0,
+    #     back_edge_scale=0.10,
+    #     kelly_fraction_back=0.25,
+    #     bankroll_back=100.0,
+    #     min_back_stake=0.0,
+    #     max_back_stake=10.0,
+    #
+    #     # --- economics ---
+    #     commission_rate=0.02,
+    #
+    #     # --- outputs ---
+    #     save_bets_csv=True,
+    #     bets_csv_dir=None,  # or r"path\to\bets"
+    #     plot_pl=True,
+    #     plot_dir=None,  # or r"path\to\plots"
+    #     plot_title_suffix="LAY_HOME v2"
+    # )
+    #
+    # fl.run_models_outcome_v2(
+    #     matches_filtered=matches,
+    #     features=features,
+    #     market="LAY_HOME",
+    #
+    #     # --- training / search (same) ---
+    #     base_model="mlp",
+    #     search_mode="random",
+    #     n_random_param_sets=5,
+    #     cpu_jobs=10,
+    #     min_samples=500,
+    #     min_test_samples=500,
+    #     precision_test_threshold=0.10,
+    #     max_precision_drop=0.05,
+    #     min_val_auc=0.55,
+    #     max_val_brier=None,
+    #
+    #     # --- VALUE mode (LAY only) ---
+    #     use_value_for_lay=True,
+    #     use_value_for_back=False,
+    #     value_edge_grid_lay=np.round(np.arange(0.00, 0.201, 0.01), 2),
+    #
+    #     # Try a different floor
+    #     lay_min_odds=2.00,  # e.g. only lay 2.0+
+    #
+    #     # And a different staking style
+    #     staking_plan_lay="flat_stake",
+    #
+    #     staking_plan_back="flat",  # unused in this LAY run
+    #
+    #     back_stake_test=1.0,
+    #     back_edge_scale=0.10,
+    #     kelly_fraction_back=0.25,
+    #     bankroll_back=100.0,
+    #     min_back_stake=0.0,
+    #     max_back_stake=10.0,
+    #
+    #     commission_rate=0.02,
+    #
+    #     save_bets_csv=True,
+    #     bets_csv_dir=None,
+    #     plot_pl=True,
+    #     plot_dir=None,
+    #     plot_title_suffix="LAY_HOME v2 (flat stake, min_odds=2.0)"
+    # )
 
-        # (fast) coarse search — adjust as you like
-        thresholds=np.round(np.arange(0.20, 0.81, 0.05), 2),
-        #classify_odds_min_grid=np.array([1.01]),  # collapse band sweep (fast)
-        #classify_odds_max_grid=np.array([1000.0]),
-        classify_odds_min_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
-        classify_odds_max_grid=np.round(np.arange(1.00, 10.01, 0.25), 2),
-
-        # test BOTH lay staking variants during CLASSIFY
-        classify_lay_flat_stake=1.0,  # flat stake per bet
-        classify_lay_liability=1.0,  # flat liability per bet
-
-        # training/search controls
-        base_model="xgb", search_mode="random",
-        n_random_param_sets=25, cpu_jobs=9,
-        min_samples=400, min_test_samples=400,
-        precision_test_threshold=0.10,
-        max_precision_drop=0.05,
-
-        # economics & outputs
-        commission_rate=0.02,
-        save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
-    )
-
-    # VALUE
-    fl.run_models_outcome(
-        matches_filtered=matches,
-        features=features,
-        market="LAY_HOME",
-
-        # force VALUE (LAY)
-        use_value_for_lay=True,
-        use_value_for_back=False,
-
-        # edge sweep: fair ≥ (1 + edge) × market
-        value_edge_grid_lay=np.round(np.arange(0.00, 0.201, 0.01), 2),
-
-        # (optional) search only flat-stake & flat-liability plans
-        enable_staking_plan_search=True,
-        staking_plan_lay_options=["flat_stake", "liability"],
-
-        # staking parameters / bounds for LAY
-        lay_flat_stake=1.0,
-        liability_test=1.0,
-        min_lay_stake=0.0, max_lay_stake=1.0,
-        min_lay_liability=0.0, max_lay_liability=2.0,
-
-        # training/search controls
-        base_model="xgb", search_mode="random",
-        n_random_param_sets=25, cpu_jobs=9,
-        min_samples=400, min_test_samples=400,
-        precision_test_threshold=0.10,
-        max_precision_drop=0.05,
-
-        # economics & outputs
-        commission_rate=0.02,
-        save_bets_csv=True, save_all_bets_csv=True, plot_pl=True
-    )
+    # res = fl.run_models_outcome_v3_default_models(
+    #     matches_filtered=matches,
+    #     features=features,
+    #     market="LAY_HOME",
+    #
+    #     # --- models to test (DEFAULT params) ---
+    #     models_to_test=('xgb', 'mlp'),  # "mlp", "xgb", "lr", "rf"
+    #
+    #     # --- runtime ---
+    #     n_random_param_sets=25,
+    #     cpu_jobs=10,
+    #     top_k=10,
+    #
+    #     # --- gates ---
+    #     min_samples=500,
+    #     min_test_samples=500,
+    #     precision_test_threshold=0.10,
+    #     max_precision_drop=0.05,
+    #     min_val_auc=0.55,
+    #     max_val_brier=None,
+    #
+    #     # --- VALUE mode (LAY only) ---
+    #     use_value_for_lay=True,
+    #     use_value_for_back=False,
+    #     value_edge_grid_lay=np.round(np.arange(0.00, 0.201, 0.01), 2),
+    #
+    #     # ✅ test multiple min-odds floors
+    #     lay_min_odds_grid=[1.50, 1.70, 2.00, 2.20, 2.50],
+    #
+    #     # ✅ test both staking styles (stake-to-liability + flat stake)
+    #     lay_staking_plans_to_test=("liability", "flat_stake"),
+    #
+    #     # back plan unused in this LAY run
+    #     staking_plan_back="flat",
+    #
+    #     commission_rate=0.02,
+    #
+    #     out_dir=None,
+    #     plot_title_suffix="LAY_HOME v3 (default models + staking sweep + min_odds grid)",
+    # )
 
     end = time.time()
 
